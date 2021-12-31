@@ -25,6 +25,7 @@
 #include <vector>
 #include "rocksdb/status.h"
 #include "rocksdb/thread_status.h"
+#include "rocksdb/metadata.h"
 
 #ifdef _WIN32
 // Windows API macro interference
@@ -57,6 +58,8 @@ struct MutableDBOptions;
 class RateLimiter;
 class ThreadStatusUpdater;
 struct ThreadStatus;
+
+struct Options;
 
 const size_t kDefaultPageSize = 4 * 1024;
 
@@ -126,6 +129,8 @@ struct EnvOptions {
   // See DBOptions doc
   size_t writable_file_max_buffer_size = 1024 * 1024;
 
+  uint64_t allocate_size = 0; // add for lo_env
+
   // If not nullptr, write rate limiting is enabled for flush and compaction
   RateLimiter* rate_limiter = nullptr;
 };
@@ -162,6 +167,8 @@ class Env {
   //
   // The result of Default() belongs to rocksdb and must never be deleted.
   static Env* Default();
+
+  virtual void SpanDBMigration(std::vector<LiveFileMetaData>){};
 
   // Create a brand new sequentially-readable file with the specified name.
   // On success, stores a pointer to the new file in *result and returns OK.
@@ -204,6 +211,12 @@ class Env {
   virtual Status NewWritableFile(const std::string& fname,
                                  std::unique_ptr<WritableFile>* result,
                                  const EnvOptions& options) = 0;
+  
+  virtual Status NewWritableFile(const std::string& fname,
+                                 std::unique_ptr<WritableFile>* result,
+                                 const EnvOptions& options, uint64_t pre_allocate_size){
+        return NewWritableFile(fname, result, options); // default implementation. override in some subclasses.
+  }
 
   // Create an object that writes to a new file with the specified
   // name.  Deletes any existing file with the same name and creates a
@@ -232,7 +245,7 @@ class Env {
   virtual Status NewRandomRWFile(const std::string& /*fname*/,
                                  std::unique_ptr<RandomRWFile>* /*result*/,
                                  const EnvOptions& /*options*/) {
-    return Status::NotSupported("RandomRWFile is not implemented in this Env");
+      return Status::NotSupported("RandomRWFile is not implemented in this Env");
   }
 
   // Opens `fname` as a memory-mapped file for read and write (in-place updates
@@ -447,6 +460,9 @@ class Env {
   // default number: 1
   virtual void SetBackgroundThreads(int number, Priority pri = LOW) = 0;
   virtual int GetBackgroundThreads(Priority pri = LOW) = 0;
+  virtual void SetBgThreadCores(int num, Priority pri) { };
+  virtual int GetBgThreadCores(Priority pri){return 0;}
+  virtual void ResetStat(){};
 
   virtual Status SetAllowNonOwnerAccess(bool /*allow_non_owner_access*/) {
     return Status::NotSupported("Not supported.");
@@ -1152,6 +1168,10 @@ class EnvWrapper : public Env {
   // Return the target to which this Env forwards all calls
   Env* target() const { return target_; }
 
+  void SpanDBMigration(std::vector<LiveFileMetaData> files_metadata) {
+    target_->SpanDBMigration(files_metadata);
+  };
+
   // The following text is boilerplate that forwards all methods to target()
   Status NewSequentialFile(const std::string& f,
                            std::unique_ptr<SequentialFile>* r,
@@ -1167,6 +1187,13 @@ class EnvWrapper : public Env {
                          const EnvOptions& options) override {
     return target_->NewWritableFile(f, r, options);
   }
+
+  Status NewWritableFile(const std::string& f,
+                                 std::unique_ptr<WritableFile>* r,
+                                 const EnvOptions& options, uint64_t pre_allocate_size) override {
+    return target_->NewWritableFile(f, r, options, pre_allocate_size);
+  }
+
   Status ReopenWritableFile(const std::string& fname,
                             std::unique_ptr<WritableFile>* result,
                             const EnvOptions& options) override {
@@ -1301,6 +1328,16 @@ class EnvWrapper : public Env {
   }
   int GetBackgroundThreads(Priority pri) override {
     return target_->GetBackgroundThreads(pri);
+  }
+
+  void SetBgThreadCores(int num, Priority pri) override { //add for spandb
+    target_->SetBgThreadCores(num, pri);
+  }
+
+  void ResetStat() override{ target_->ResetStat(); };
+
+  int GetBgThreadCores(Priority pri) override{
+    return target_->GetBgThreadCores(pri);
   }
 
   Status SetAllowNonOwnerAccess(bool allow_non_owner_access) override {
@@ -1584,4 +1621,7 @@ Env* NewTimedEnv(Env* base_env);
 Status NewEnvLogger(const std::string& fname, Env* env,
                     std::shared_ptr<Logger>* result);
 
+Env* NewSpdkEnv(Env* base_env);
+Env* NewSpdkEnv(Env* base_env, std::string pcie_addr, const Options &opt, int open_mod);
+Env* NewPosix2dEnv(std::string prefix_, int max_level = -1, std::string data_dir = "");
 }  // namespace rocksdb

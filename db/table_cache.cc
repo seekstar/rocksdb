@@ -98,19 +98,52 @@ Status TableCache::GetTableReader(
   std::string fname =
       TableFileName(ioptions_.cf_paths, fd.GetNumber(), fd.GetPathId());
   std::unique_ptr<RandomAccessFile> file;
-  Status s = ioptions_.env->NewRandomAccessFile(fname, &file, env_options);
+  Status s;
+  //Status s = ioptions_.env->NewRandomAccessFile(fname, &file, env_options);
+  /*if(level<= ioptions_.max_level){
+    s = ioptions_.lo_env->NewRandomAccessFile(fname, &file, env_options);
+    if(!s.ok() && level == -1){
+      s = ioptions_.env->NewRandomAccessFile(fname, &file, env_options);
+    }
+  }else{
+    s = ioptions_.env->NewRandomAccessFile(fname, &file, env_options);
+  }*/
+  s = ioptions_.lo_env->NewRandomAccessFile(fname, &file, env_options);
+  if(!s.ok()){
+    s = ioptions_.env->NewRandomAccessFile(fname, &file, env_options);
+  }
 
+  if(UNLIKELY(!s.ok())){
+    printf("NewRandomAccessFile %s at level %d\n", fname.c_str(), level);
+    printf("%s\n",s.ToString().c_str());
+  }
   RecordTick(ioptions_.statistics, NO_FILE_OPENS);
   if (s.ok()) {
     if (!sequential_mode && ioptions_.advise_random_on_open) {
       file->Hint(RandomAccessFile::RANDOM);
     }
     StopWatch sw(ioptions_.env, ioptions_.statistics, TABLE_OPEN_IO_MICROS);
-    std::unique_ptr<RandomAccessFileReader> file_reader(
+    /*std::unique_ptr<RandomAccessFileReader> file_reader(
+        new RandomAccessFileReader(
+            std::move(file), fname, ioptions_.env,
+            record_read_stats ? ioptions_.statistics : nullptr, SST_READ_MICROS,
+            file_read_hist, ioptions_.rate_limiter, ioptions_.listeners));*/
+    std::unique_ptr<RandomAccessFileReader> file_reader;
+    //if(level <= ioptions_.max_level)
+    if(ioptions_.lo_env->FileExists(fname).ok())
+    {
+      file_reader.reset(
+        new RandomAccessFileReader(
+            std::move(file), fname, ioptions_.lo_env,
+            record_read_stats ? ioptions_.statistics : nullptr, SST_READ_MICROS,
+            file_read_hist, ioptions_.rate_limiter, ioptions_.listeners));
+    }else{
+      file_reader.reset(
         new RandomAccessFileReader(
             std::move(file), fname, ioptions_.env,
             record_read_stats ? ioptions_.statistics : nullptr, SST_READ_MICROS,
             file_read_hist, ioptions_.rate_limiter, ioptions_.listeners));
+    }
     s = ioptions_.table_factory->NewTableReader(
         TableReaderOptions(ioptions_, prefix_extractor, env_options,
                            internal_comparator, skip_filters, immortal_tables_,
@@ -154,6 +187,7 @@ Status TableCache::FindTable(const EnvOptions& env_options,
                        false /* sequential mode */, record_read_stats,
                        file_read_hist, &table_reader, prefix_extractor,
                        skip_filters, level, prefetch_index_and_filter_in_cache);
+
     if (!s.ok()) {
       assert(table_reader == nullptr);
       RecordTick(ioptions_.statistics, NO_FILE_ERRORS);

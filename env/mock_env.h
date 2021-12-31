@@ -22,6 +22,7 @@ namespace rocksdb {
 class MemFile;
 class MockEnv : public EnvWrapper {
  public:
+  using EnvWrapper::NewWritableFile;
   explicit MockEnv(Env* base_env);
 
   virtual ~MockEnv();

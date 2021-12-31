@@ -56,6 +56,7 @@ extern Slice CompressibleString(Random* rnd, double compressed_fraction,
 // A wrapper that allows injection of errors.
 class ErrorEnv : public EnvWrapper {
  public:
+  using EnvWrapper::NewWritableFile;
   bool writable_file_error_;
   int num_writable_file_errors_;
 
@@ -527,6 +528,7 @@ inline std::string EncodeInt(uint64_t x) {
 
   class StringEnv : public EnvWrapper {
    public:
+    using EnvWrapper::NewWritableFile;
     class StringSink : public WritableFile {
      public:
       explicit StringSink(std::string* contents)

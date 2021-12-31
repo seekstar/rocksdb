@@ -156,7 +156,7 @@ DBOptions SanitizeOptions(const std::string& dbname, const DBOptions& src) {
   // and facilitating recovery from out of space errors.
   if (result.sst_file_manager.get() == nullptr) {
     std::shared_ptr<SstFileManager> sst_file_manager(
-        NewSstFileManager(result.env, result.info_log));
+        NewSstFileManager(result.env, result.lo_env, result.info_log));
     result.sst_file_manager = sst_file_manager;
   }
 #endif
@@ -328,6 +328,238 @@ Status Directories::SetDirectories(Env* env, const std::string& dbname,
   }
   assert(data_dirs_.size() == data_paths.size());
   return Status::OK();
+}
+
+Status DBImpl::SPDKLoggingRecover(SequenceNumber* next_sequence, bool read_only, 
+                                  const std::vector<uint64_t>& log_numbers){
+  struct LogReporter : public log::Reader::Reporter {
+    Env* env;
+    Logger* info_log;
+    const char* fname;
+    Status* status;  // nullptr if immutable_db_options_.paranoid_checks==false
+    void Corruption(size_t bytes, const Status& s) override {
+      ROCKS_LOG_WARN(info_log, "%s%s: dropping %d bytes; %s",
+                     (this->status == nullptr ? "(ignoring error) " : ""),
+                     fname, static_cast<int>(bytes), s.ToString().c_str());
+      if (this->status != nullptr && this->status->ok()) {
+        *this->status = s;
+      }
+    }
+  };
+
+  mutex_.AssertHeld();
+  Status status;
+  std::unordered_map<int, VersionEdit> version_edits;
+  // no need to refcount because iteration is under mutex
+  for (auto cfd : *versions_->GetColumnFamilySet()) {
+    VersionEdit edit;
+    edit.SetColumnFamily(cfd->GetID());
+    version_edits.insert({cfd->GetID(), edit});
+  }
+  int job_id = next_job_id_.fetch_add(1);
+  {
+    auto stream = event_logger_.Log();
+    stream << "job" << job_id << "event"
+           << "recovery_started";
+    stream << "log_files";
+    stream.StartArray();
+    for (auto log_number : log_numbers) {
+      stream << log_number;
+    }
+    stream.EndArray();
+  }
+
+  #ifndef ROCKSDB_LITE
+  if (immutable_db_options_.wal_filter != nullptr) {
+    std::map<std::string, uint32_t> cf_name_id_map;
+    std::map<uint32_t, uint64_t> cf_lognumber_map;
+    for (auto cfd : *versions_->GetColumnFamilySet()) {
+      cf_name_id_map.insert(std::make_pair(cfd->GetName(), cfd->GetID()));
+      cf_lognumber_map.insert(
+          std::make_pair(cfd->GetID(), cfd->GetLogNumber()));
+    }
+  
+    immutable_db_options_.wal_filter->ColumnFamilyLogNumberMap(cf_lognumber_map,
+                                                               cf_name_id_map);
+  }
+  #endif
+
+  bool stop_replay_by_wal_filter = false;
+  bool stop_replay_for_corruption = false;
+  bool flushed = false;
+  uint64_t corrupted_log_number = kMaxSequenceNumber;
+  uint64_t min_log_number = MinLogNumberToKeep();
+
+  // start SPDK recovery
+  auto start_time = SPDK_TIME;
+  char *log_entry = nullptr;
+  uint32_t size = 0;
+  uint32_t log_number = 0;
+  log_entry = spdk_recovery_->GetLogEntry(size, log_number);
+  WriteBatch batch;
+  while(log_entry != nullptr){//for (auto log_number : log_numbers)
+    versions_->MarkFileNumberUsed(log_number);
+    //printf("log number: %u\n", log_number);
+    Slice record = Slice(log_entry, size);
+    WriteBatchInternal::SetContents(&batch, record); 
+    //SequenceNumber sequence = WriteBatchInternal::Sequence(&batch);
+    bool has_valid_writes = false;
+    status = WriteBatchInternal::InsertInto(
+          &batch, column_family_memtables_.get(), &flush_scheduler_,
+          &trim_history_scheduler_, true, log_number, this,
+          false /* concurrent_memtable_writes */, next_sequence,
+          &has_valid_writes, seq_per_batch_, batch_per_txn_);
+    MaybeIgnoreError(&status);
+    
+    if (has_valid_writes && !read_only) {
+      // we can do this because this is called before client has access to the
+      // DB and there is only a single thread operating on DB
+      ColumnFamilyData* cfd;
+
+      while ((cfd = flush_scheduler_.TakeNextColumnFamily()) != nullptr) {
+        cfd->Unref();
+        // If this asserts, it means that InsertInto failed in
+        // filtering updates to already-flushed column families
+        assert(cfd->GetLogNumber() <= log_number);
+        auto iter = version_edits.find(cfd->GetID());
+        assert(iter != version_edits.end());
+        VersionEdit* edit = &iter->second;
+        status = WriteLevel0TableForRecovery(job_id, cfd, cfd->mem(), edit);
+        if (!status.ok()) {
+          // Reflect errors immediately so that conditions like full
+          // file-systems cause the DB::Open() to fail.
+          return status;
+        }
+        flushed = true;
+        cfd->CreateNewMemtable(*cfd->GetLatestMutableCFOptions(),
+                                 *next_sequence);
+      }
+    }
+    uint32_t new_log_num = 0;
+    log_entry = spdk_recovery_->GetLogEntry(size, new_log_num);
+    if(new_log_num == log_number)
+      continue;
+    log_number = new_log_num;
+    flush_scheduler_.Clear();
+    trim_history_scheduler_.Clear();
+    auto last_sequence = *next_sequence - 1;
+    if ((*next_sequence != kMaxSequenceNumber) &&
+        (versions_->LastSequence() <= last_sequence)) {
+      versions_->SetLastAllocatedSequence(last_sequence);
+      versions_->SetLastPublishedSequence(last_sequence);
+      versions_->SetLastSequence(last_sequence);
+    }
+  }
+  printf("SPDK recovery time: %.2lf s\n", SPDK_TIME_DURATION(start_time, SPDK_TIME, spdk_get_ticks_hz())/1000/1000);
+
+  // Compare the corrupted log number to all columnfamily's current log number.
+  // Abort Open() if any column family's log number is greater than
+  // the corrupted log number, which means CF contains data beyond the point of
+  // corruption. This could during PIT recovery when the WAL is corrupted and
+  // some (but not all) CFs are flushed
+  if (stop_replay_for_corruption == true &&
+      (immutable_db_options_.wal_recovery_mode ==
+           WALRecoveryMode::kPointInTimeRecovery ||
+       immutable_db_options_.wal_recovery_mode ==
+           WALRecoveryMode::kTolerateCorruptedTailRecords)) {
+    for (auto cfd : *versions_->GetColumnFamilySet()) {
+      if (cfd->GetLogNumber() > corrupted_log_number) {
+        ROCKS_LOG_ERROR(immutable_db_options_.info_log,
+                        "Column family inconsistency: SST file contains data"
+                        " beyond the point of corruption.");
+        return Status::Corruption("SST file is ahead of WALs");
+      }
+    }
+  } 
+
+  // True if there's any data in the WALs; if not, we can skip re-processing
+  // them later
+  bool data_seen = false;
+  if (!read_only) {
+    // no need to refcount since client still doesn't have access
+    // to the DB and can not drop column families while we iterate
+    auto max_log_number = log_numbers.back();
+    for (auto cfd : *versions_->GetColumnFamilySet()) {
+      auto iter = version_edits.find(cfd->GetID());
+      assert(iter != version_edits.end());
+      VersionEdit* edit = &iter->second;
+
+      if (cfd->GetLogNumber() > max_log_number) {
+        // Column family cfd has already flushed the data
+        // from all logs. Memtable has to be empty because
+        // we filter the updates based on log_number
+        // (in WriteBatch::InsertInto)
+        assert(cfd->mem()->GetFirstSequenceNumber() == 0);
+        assert(edit->NumEntries() == 0);
+        continue;
+      }
+
+      TEST_SYNC_POINT_CALLBACK(
+          "DBImpl::RecoverLogFiles:BeforeFlushFinalMemtable", /*arg=*/nullptr);
+
+      // flush the final memtable (if non-empty)
+      if (cfd->mem()->GetFirstSequenceNumber() != 0) {
+        // If flush happened in the middle of recovery (e.g. due to memtable
+        // being full), we flush at the end. Otherwise we'll need to record
+        // where we were on last flush, which make the logic complicated.
+        if (flushed || !immutable_db_options_.avoid_flush_during_recovery) {
+          status = WriteLevel0TableForRecovery(job_id, cfd, cfd->mem(), edit);
+          if (!status.ok()) {
+            // Recovery failed
+            break;
+          }
+          flushed = true;
+
+          cfd->CreateNewMemtable(*cfd->GetLatestMutableCFOptions(),
+                                 versions_->LastSequence());
+        }
+        data_seen = true;
+      }
+
+      // Update the log number info in the version edit corresponding to this
+      // column family. Note that the version edits will be written to MANIFEST
+      // together later.
+      // writing log_number in the manifest means that any log file
+      // with number strongly less than (log_number + 1) is already
+      // recovered and should be ignored on next reincarnation.
+      // Since we already recovered max_log_number, we want all logs
+      // with numbers `<= max_log_number` (includes this one) to be ignored
+      if (flushed || cfd->mem()->GetFirstSequenceNumber() == 0) {
+        edit->SetLogNumber(max_log_number + 1);
+      }
+    }
+    if (status.ok()) {
+      // we must mark the next log number as used, even though it's
+      // not actually used. that is because VersionSet assumes
+      // VersionSet::next_file_number_ always to be strictly greater than any
+      // log number
+      versions_->MarkFileNumberUsed(max_log_number + 1);
+
+      autovector<ColumnFamilyData*> cfds;
+      autovector<const MutableCFOptions*> cf_opts;
+      autovector<autovector<VersionEdit*>> edit_lists;
+      for (auto* cfd : *versions_->GetColumnFamilySet()) {
+        cfds.push_back(cfd);
+        cf_opts.push_back(cfd->GetLatestMutableCFOptions());
+        auto iter = version_edits.find(cfd->GetID());
+        assert(iter != version_edits.end());
+        edit_lists.push_back({&iter->second});
+      }
+      // write MANIFEST with update
+      status = versions_->LogAndApply(cfds, cf_opts, edit_lists, &mutex_,
+                                      directories_.GetDbDir(),
+                                      /*new_descriptor_log=*/true);
+    }
+  }
+
+  if (status.ok() && data_seen && !flushed) {
+    // status = RestoreAliveLogFiles(log_numbers);
+  }
+
+  event_logger_.Log() << "job" << job_id << "event"
+                      << "recovery_finished";
+
+  return status;
 }
 
 Status DBImpl::Recover(
@@ -524,7 +756,41 @@ Status DBImpl::Recover(
       }
     }
 
-    if (!logs.empty()) {
+    //spandb
+    if(immutable_db_options_.ssdlogging_type == "spdk" &&
+       immutable_db_options_.spdk_recovery){
+      spdk_recovery_ = 
+          // new ssdlogging::SSDLoggingRecovery(spdk_logging_server_->GetSPDK(), 4);
+          new ssdlogging::SSDLoggingRecovery(immutable_db_options_.ssdlogging_path, 4);
+      logs = spdk_recovery_->GetLogs();
+      s = SPDKLoggingRecover(&next_sequence, read_only, logs);
+      delete spdk_recovery_;
+
+      /*ssdlogging::SSDLoggingRecovery *recovery = 
+          new ssdlogging::SSDLoggingRecovery(spdk_logging_server_->GetSPDK(), 
+                                            0, immutable_db_options_.last_logging_lpn, 4);*/
+      /*char *log_entry = nullptr;
+      uint32_t size = 0;
+      log_entry = recovery->GetLogEntry(size);
+      WriteBatch batch;
+      while(log_entry != nullptr){
+        assert(size != 0);
+        Slice record = Slice(log_entry, size);
+        WriteBatchInternal::SetContents(&batch, record);        
+        bool has_valid_writes = false;
+        Status status = WriteBatchInternal::InsertInto(
+              &batch, column_family_memtables_.get(), &flush_scheduler_,
+              &trim_history_scheduler_, true, 0, this,
+              true, &next_sequence,
+              &has_valid_writes, seq_per_batch_, batch_per_txn_);
+            MaybeIgnoreError(&status);
+
+        log_entry = recovery->GetLogEntry(size);
+      }
+      delete recovery;*/
+    }
+
+    if (!logs.empty() && !immutable_db_options_.spdk_recovery) {
       // Recover in the order in which the logs were generated
       std::sort(logs.begin(), logs.end());
       s = RecoverLogFiles(logs, &next_sequence, read_only);
@@ -704,7 +970,7 @@ Status DBImpl::RecoverLogFiles(const std::vector<uint64_t>& log_numbers,
       cf_lognumber_map.insert(
           std::make_pair(cfd->GetID(), cfd->GetLogNumber()));
     }
-
+  
     immutable_db_options_.wal_filter->ColumnFamilyLogNumberMap(cf_lognumber_map,
                                                                cf_name_id_map);
   }
@@ -715,6 +981,8 @@ Status DBImpl::RecoverLogFiles(const std::vector<uint64_t>& log_numbers,
   bool flushed = false;
   uint64_t corrupted_log_number = kMaxSequenceNumber;
   uint64_t min_log_number = MinLogNumberToKeep();
+
+  auto start_time = SSDLOGGING_TIME_NOW;
   for (auto log_number : log_numbers) {
     if (log_number < min_log_number) {
       ROCKS_LOG_INFO(immutable_db_options_.info_log,
@@ -939,7 +1207,7 @@ Status DBImpl::RecoverLogFiles(const std::vector<uint64_t>& log_numbers,
                                  *next_sequence);
         }
       }
-    }
+    }/* while(reader)*/
 
     if (!status.ok()) {
       if (status.IsNotSupported()) {
@@ -980,7 +1248,9 @@ Status DBImpl::RecoverLogFiles(const std::vector<uint64_t>& log_numbers,
       versions_->SetLastPublishedSequence(last_sequence);
       versions_->SetLastSequence(last_sequence);
     }
-  }
+  }/* for (auto log_number : log_numbers) */
+  printf("RocksDB recovery: %.2lf s\n", SSDLOGGING_TIME_DURATION(start_time, SSDLOGGING_TIME_NOW) / 1000 / 1000);
+
   // Compare the corrupted log number to all columnfamily's current log number.
   // Abort Open() if any column family's log number is greater than
   // the corrupted log number, which means CF contains data beyond the point of
@@ -1194,7 +1464,23 @@ Status DBImpl::WriteLevel0TableForRecovery(int job_id, ColumnFamilyData* cfd,
       if (range_del_iter != nullptr) {
         range_del_iters.emplace_back(range_del_iter);
       }
-      s = BuildTable(
+      env_options_for_compaction_.allocate_size =  mem->get_data_size() * 2;
+      if(-1 <= spandb_controller_.GetMaxLevel()){
+      // if(-1 <= immutable_db_options_.max_level){
+        s = BuildTable(
+            dbname_, /*env_*/lo_env_, *cfd->ioptions(), mutable_cf_options,
+            env_options_for_compaction_, cfd->table_cache(), iter.get(),
+            std::move(range_del_iters), &meta, cfd->internal_comparator(),
+            cfd->int_tbl_prop_collector_factories(), cfd->GetID(), cfd->GetName(),
+            snapshot_seqs, earliest_write_conflict_snapshot, snapshot_checker,
+            GetCompressionFlush(*cfd->ioptions(), mutable_cf_options),
+            mutable_cf_options.sample_for_compression,
+            cfd->ioptions()->compression_opts, paranoid_file_checks,
+            cfd->internal_stats(), TableFileCreationReason::kRecovery,
+            &event_logger_, job_id, Env::IO_HIGH, nullptr /* table_properties */,
+            -1 /* level */, current_time, write_hint);
+      }else{
+        s = BuildTable(
           dbname_, env_, *cfd->ioptions(), mutable_cf_options,
           env_options_for_compaction_, cfd->table_cache(), iter.get(),
           std::move(range_del_iters), &meta, cfd->internal_comparator(),
@@ -1206,6 +1492,7 @@ Status DBImpl::WriteLevel0TableForRecovery(int job_id, ColumnFamilyData* cfd,
           cfd->internal_stats(), TableFileCreationReason::kRecovery,
           &event_logger_, job_id, Env::IO_HIGH, nullptr /* table_properties */,
           -1 /* level */, current_time, write_hint);
+      }
       LogFlush(immutable_db_options_.info_log);
       ROCKS_LOG_DEBUG(immutable_db_options_.info_log,
                       "[%s] [WriteLevel0TableForRecovery]"
@@ -1240,6 +1527,7 @@ Status DBImpl::WriteLevel0TableForRecovery(int job_id, ColumnFamilyData* cfd,
 
 Status DB::Open(const Options& options, const std::string& dbname, DB** dbptr) {
   DBOptions db_options(options);
+  spandb_controller_.SetMaxLevel(options.max_level); //initialization
   ColumnFamilyOptions cf_options(options);
   std::vector<ColumnFamilyDescriptor> column_families;
   column_families.push_back(
@@ -1377,8 +1665,23 @@ Status DBImpl::Open(const DBOptions& db_options, const std::string& dbname,
   impl->wal_in_db_path_ = IsWalDirSameAsDBPath(&impl->immutable_db_options_);
 
   impl->mutex_.Lock();
+
+  // spandb
+  if(db_options.enable_spdklogging){
+    if(db_options.ssdlogging_type == "spdk"){
+      impl->spdk_logging_server_ = new ssdlogging::SPDKLoggingServer(db_options.ssdlogging_path,
+                                    db_options.ssdlogging_num, db_options.logging_server_num);
+      if(!db_options.transactional_mode){
+        impl->CreateRequestSchduler();
+      }
+    }else{
+      assert(0);
+    }
+  }
+
   // Handles create_if_missing, error_if_exists
   s = impl->Recover(column_families);
+
   if (s.ok()) {
     uint64_t new_log_number = impl->versions_->NewFileNumber();
     log::Writer* new_log = nullptr;
@@ -1386,6 +1689,10 @@ Status DBImpl::Open(const DBOptions& db_options, const std::string& dbname,
         impl->GetWalPreallocateBlockSize(max_write_buffer_size);
     s = impl->CreateWAL(new_log_number, 0 /*recycle_log_number*/,
                         preallocate_block_size, &new_log);
+
+    if(impl->spdk_logging_server_ != nullptr) // spandb
+      impl->spdk_logging_server_->CreateWAL(new_log_number);
+
     if (s.ok()) {
       InstrumentedMutexLock wl(&impl->log_write_mutex_);
       impl->logfile_number_ = new_log_number;

@@ -374,6 +374,7 @@ class EncryptedRandomRWFile : public RandomRWFile {
 // EncryptedEnv implements an Env wrapper that adds encryption to files stored on disk.
 class EncryptedEnv : public EnvWrapper {
  public:
+  using EnvWrapper::NewWritableFile;
   EncryptedEnv(Env* base_env, EncryptionProvider *provider)
       : EnvWrapper(base_env) {
     provider_ = provider;

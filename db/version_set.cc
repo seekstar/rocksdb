@@ -1250,6 +1250,9 @@ Status Version::GetTableProperties(std::shared_ptr<const TableProperties>* tp,
                     file_meta->fd.GetPathId());
   }
   s = ioptions->env->NewRandomAccessFile(file_name, &file, env_options_);
+  if(!s.ok()){
+    s = ioptions->lo_env->NewRandomAccessFile(file_name, &file, env_options_);
+  }
   if (!s.ok()) {
     return s;
   }
@@ -1810,7 +1813,8 @@ void Version::Get(const ReadOptions& read_options, const LookupKey& k,
         cfd_->internal_stats()->GetFileReadHist(fp.GetHitFileLevel()),
         IsFilterSkipped(static_cast<int>(fp.GetHitFileLevel()),
                         fp.IsHitFileLastInLevel()),
-        fp.GetCurrentLevel());
+        /*fp.GetCurrentLevel());*/
+        fp.GetHitFileLevel());
     // TODO: examine the behavior for corrupted key
     if (timer_enabled) {
       PERF_COUNTER_BY_LEVEL_ADD(get_from_table_nanos, timer.ElapsedNanos(),
@@ -1943,7 +1947,7 @@ void Version::MultiGet(const ReadOptions& read_options, MultiGetRange* range,
         mutable_cf_options_.prefix_extractor.get(),
         cfd_->internal_stats()->GetFileReadHist(fp.GetHitFileLevel()),
         IsFilterSkipped(static_cast<int>(fp.GetHitFileLevel()),
-                        fp.IsHitFileLastInLevel()),
+        fp.IsHitFileLastInLevel()),
         fp.GetCurrentLevel());
     // TODO: examine the behavior for corrupted key
     if (timer_enabled) {
@@ -2193,7 +2197,6 @@ void Version::UpdateAccumulatedStats(bool update_stats) {
 void VersionStorageInfo::ComputeCompensatedSizes() {
   static const int kDeletionWeightOnCompaction = 2;
   uint64_t average_value_size = GetAverageValueSize();
-
   // compute the compensated size
   for (int level = 0; level < num_levels_; level++) {
     for (auto* file_meta : files_[level]) {
@@ -5276,7 +5279,7 @@ InternalIterator* VersionSet::MakeInputIterator(
               /*table_reader_ptr=*/nullptr,
               /*file_read_hist=*/nullptr, TableReaderCaller::kCompaction,
               /*arena=*/nullptr,
-              /*skip_filters=*/false, /*level=*/static_cast<int>(which),
+              /*skip_filters=*/false, /*level=*//*static_cast<int>(which)*/static_cast<int>(c->level(which)),
               /*smallest_compaction_key=*/nullptr,
               /*largest_compaction_key=*/nullptr);
         }
@@ -5289,7 +5292,7 @@ InternalIterator* VersionSet::MakeInputIterator(
             /*should_sample=*/false,
             /*no per level latency histogram=*/nullptr,
             TableReaderCaller::kCompaction, /*skip_filters=*/false,
-            /*level=*/static_cast<int>(which), range_del_agg,
+            /*level=*//*static_cast<int>(which)*/static_cast<int>(c->level(which)), range_del_agg,
             c->boundaries(which));
       }
     }

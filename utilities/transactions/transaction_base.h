@@ -343,6 +343,7 @@ class TransactionBaseImpl : public Transaction {
 
  private:
   friend class WritePreparedTxn;
+  friend class AsyncWritePreparedTxn;  // add for async
   // Extra data to be persisted with the commit. Note this is only used when
   // prepare phase is not skipped.
   WriteBatch commit_time_batch_;

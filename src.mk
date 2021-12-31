@@ -228,9 +228,20 @@ LIB_SOURCES =                                                   \
   utilities/transactions/write_prepared_txn_db.cc               \
   utilities/transactions/write_unprepared_txn.cc                \
   utilities/transactions/write_unprepared_txn_db.cc             \
+  utilities/transactions/async_write_committed_txn_db.cc       \
+  utilities/transactions/async_write_committed_txn.cc        \
+  utilities/transactions/async_write_prepared_txn.cc                  \
+  utilities/transactions/async_write_prepared_txn_db.cc               \
+  db/db_impl/request_scheduler.cc \
+  db/db_impl/db_impl_async.cc \
   utilities/ttl/db_ttl_impl.cc                                  \
   utilities/write_batch_with_index/write_batch_with_index.cc    \
   utilities/write_batch_with_index/write_batch_with_index_internal.cc    \
+  ssdlogging/ssdlogging_server.cc \
+  ssdlogging/spdk_logging_server.cc \
+  ssdlogging/spdk_logging_recovery.cc \
+  ssdlogging/spdk_log_writer.cc \
+  ssdlogging/fs_log_writer.cc \
 
 ifeq ($(ARMCRC_SOURCE),1)
 LIB_SOURCES +=\

@@ -18,7 +18,7 @@
 namespace rocksdb {
 
 #ifndef ROCKSDB_LITE
-SstFileManagerImpl::SstFileManagerImpl(Env* env, std::shared_ptr<Logger> logger,
+SstFileManagerImpl::SstFileManagerImpl(Env* env, Env* lo_env, std::shared_ptr<Logger> logger,
                                        int64_t rate_bytes_per_sec,
                                        double max_trash_db_ratio,
                                        uint64_t bytes_max_delete_chunk)
@@ -29,7 +29,7 @@ SstFileManagerImpl::SstFileManagerImpl(Env* env, std::shared_ptr<Logger> logger,
       compaction_buffer_size_(0),
       cur_compactions_reserved_size_(0),
       max_allowed_space_(0),
-      delete_scheduler_(env, rate_bytes_per_sec, logger.get(), this,
+      delete_scheduler_(env, lo_env, rate_bytes_per_sec, logger.get(), this,
                         max_trash_db_ratio, bytes_max_delete_chunk),
       cv_(&mu_),
       closing_(false),
@@ -465,14 +465,14 @@ void SstFileManagerImpl::OnDeleteFileImpl(const std::string& file_path) {
   tracked_files_.erase(tracked_file);
 }
 
-SstFileManager* NewSstFileManager(Env* env, std::shared_ptr<Logger> info_log,
+SstFileManager* NewSstFileManager(Env* env, Env *lo_env, std::shared_ptr<Logger> info_log,
                                   std::string trash_dir,
                                   int64_t rate_bytes_per_sec,
                                   bool delete_existing_trash, Status* status,
                                   double max_trash_db_ratio,
                                   uint64_t bytes_max_delete_chunk) {
   SstFileManagerImpl* res =
-      new SstFileManagerImpl(env, info_log, rate_bytes_per_sec,
+      new SstFileManagerImpl(env, lo_env, info_log, rate_bytes_per_sec,
                              max_trash_db_ratio, bytes_max_delete_chunk);
 
   // trash_dir is deprecated and not needed anymore, but if user passed it
@@ -508,6 +508,7 @@ SstFileManager* NewSstFileManager(Env* env, std::shared_ptr<Logger> info_log,
 #else
 
 SstFileManager* NewSstFileManager(Env* /*env*/,
+                                  Env* /*lo_env_*/,
                                   std::shared_ptr<Logger> /*info_log*/,
                                   std::string /*trash_dir*/,
                                   int64_t /*rate_bytes_per_sec*/,

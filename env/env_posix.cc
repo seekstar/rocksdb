@@ -63,6 +63,8 @@
 #include "util/thread_local.h"
 #include "util/threadpool_imp.h"
 
+#include "../env/spandb_options.h"
+
 #if !defined(TMPFS_MAGIC)
 #define TMPFS_MAGIC 0x01021994
 #endif
@@ -160,6 +162,7 @@ class PosixDynamicLibrary : public DynamicLibrary {
 
 class PosixEnv : public Env {
  public:
+  using Env::NewWritableFile;
   PosixEnv();
 
   ~PosixEnv() override {
@@ -995,6 +998,27 @@ class PosixEnv : public Env {
   int GetBackgroundThreads(Priority pri) override {
     assert(pri >= Priority::BOTTOM && pri <= Priority::HIGH);
     return thread_pools_[pri].GetBackgroundThreads();
+  }
+
+  void SetBgThreadCores(int num, Priority pri) override{
+    if(pri == Priority::LOW){
+      spandb_controller_.SetCompactionCores(num);
+    }else if(pri == Priority::HIGH){
+      spandb_controller_.SetFlushCores(num);
+    }else{
+      assert(false);
+    }
+  }
+
+  int GetBgThreadCores(Priority pri) override{
+    if(pri == Priority::LOW){
+      return spandb_controller_.GetCompactionCores();
+    }else if(pri == Priority::HIGH){
+      return spandb_controller_.GetFlushCores();
+    }else{
+      assert(false);
+    }
+    return 0;
   }
 
   Status SetAllowNonOwnerAccess(bool allow_non_owner_access) override {

@@ -19,12 +19,13 @@
 
 namespace rocksdb {
 
-DeleteScheduler::DeleteScheduler(Env* env, int64_t rate_bytes_per_sec,
+DeleteScheduler::DeleteScheduler(Env* env, Env *lo_env,int64_t rate_bytes_per_sec,
                                  Logger* info_log,
                                  SstFileManagerImpl* sst_file_manager,
                                  double max_trash_db_ratio,
                                  uint64_t bytes_max_delete_chunk)
     : env_(env),
+      lo_env_(lo_env),
       total_trash_size_(0),
       rate_bytes_per_sec_(rate_bytes_per_sec),
       pending_files_(0),
@@ -62,8 +63,15 @@ Status DeleteScheduler::DeleteFile(const std::string& file_path,
     // max_trash_db_ratio_ (default 25%) of the total DB size
     TEST_SYNC_POINT("DeleteScheduler::DeleteFile");
     s = env_->DeleteFile(file_path);
+    
+    if(!s.ok()){ // delete from L0
+      s = lo_env_->DeleteFile(file_path);
+    }
+    
     if (s.ok()) {
       sst_file_manager_->OnDeleteFile(file_path);
+    }else{
+      printf("%s:%d: delete %s failed\n", __FILE__, __LINE__, file_path.c_str());
     }
     return s;
   }

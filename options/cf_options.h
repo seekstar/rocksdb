@@ -61,6 +61,8 @@ struct ImmutableCFOptions {
   InfoLogLevel info_log_level;
 
   Env* env;
+  Env* lo_env;
+  int max_level;
 
   // Allow the OS to mmap file for reading sst tables. Default: false
   bool allow_mmap_reads;

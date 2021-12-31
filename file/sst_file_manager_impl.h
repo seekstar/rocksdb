@@ -26,7 +26,7 @@ class Logger;
 // All SstFileManager public functions are thread-safe.
 class SstFileManagerImpl : public SstFileManager {
  public:
-  explicit SstFileManagerImpl(Env* env, std::shared_ptr<Logger> logger,
+  explicit SstFileManagerImpl(Env* env, Env *lo_env, std::shared_ptr<Logger> logger,
                               int64_t rate_bytes_per_sec,
                               double max_trash_db_ratio,
                               uint64_t bytes_max_delete_chunk);

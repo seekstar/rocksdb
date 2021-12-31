@@ -59,6 +59,7 @@ PerfContext::PerfContext(const PerfContext& other) {
   internal_recent_skipped_count = other.internal_recent_skipped_count;
   internal_merge_count = other.internal_merge_count;
   write_wal_time = other.write_wal_time;
+  ssdlogging_time = other.ssdlogging_time;  // spandb
   get_snapshot_time = other.get_snapshot_time;
   get_from_memtable_time = other.get_from_memtable_time;
   get_from_memtable_count = other.get_from_memtable_count;
@@ -154,6 +155,7 @@ PerfContext::PerfContext(PerfContext&& other) noexcept {
   internal_recent_skipped_count = other.internal_recent_skipped_count;
   internal_merge_count = other.internal_merge_count;
   write_wal_time = other.write_wal_time;
+  ssdlogging_time = other.ssdlogging_time;  // spandb
   get_snapshot_time = other.get_snapshot_time;
   get_from_memtable_time = other.get_from_memtable_time;
   get_from_memtable_count = other.get_from_memtable_count;
@@ -251,6 +253,7 @@ PerfContext& PerfContext::operator=(const PerfContext& other) {
   internal_recent_skipped_count = other.internal_recent_skipped_count;
   internal_merge_count = other.internal_merge_count;
   write_wal_time = other.write_wal_time;
+  ssdlogging_time = other.ssdlogging_time;  // spandb
   get_snapshot_time = other.get_snapshot_time;
   get_from_memtable_time = other.get_from_memtable_time;
   get_from_memtable_count = other.get_from_memtable_count;
@@ -347,6 +350,8 @@ void PerfContext::Reset() {
   internal_recent_skipped_count = 0;
   internal_merge_count = 0;
   write_wal_time = 0;
+  ssdlogging_time = 0; //spandb
+  complete_parallel_memtable_time = 0; //spandb
 
   get_snapshot_time = 0;
   get_from_memtable_time = 0;
@@ -466,6 +471,7 @@ std::string PerfContext::ToString(bool exclude_zero_counters) const {
   PERF_CONTEXT_OUTPUT(internal_recent_skipped_count);
   PERF_CONTEXT_OUTPUT(internal_merge_count);
   PERF_CONTEXT_OUTPUT(write_wal_time);
+  PERF_CONTEXT_OUTPUT(ssdlogging_time);  // spandb
   PERF_CONTEXT_OUTPUT(get_snapshot_time);
   PERF_CONTEXT_OUTPUT(get_from_memtable_time);
   PERF_CONTEXT_OUTPUT(get_from_memtable_count);

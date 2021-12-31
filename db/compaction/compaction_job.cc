@@ -581,10 +581,20 @@ Status CompactionJob::Run() {
 
   // Launch a thread for each of subcompactions 1...num_threads-1
   std::vector<port::Thread> thread_pool;
-  thread_pool.reserve(num_threads - 1);
-  for (size_t i = 1; i < compact_->sub_compact_states.size(); i++) {
-    thread_pool.emplace_back(&CompactionJob::ProcessKeyValueCompaction, this,
-                             &compact_->sub_compact_states[i]);
+  std::atomic<int> subcompact_num(0);
+  if(request_scheduler_ == nullptr){  // rocksdb
+    thread_pool.reserve(num_threads - 1);
+    for (size_t i = 1; i < compact_->sub_compact_states.size(); i++) {
+      thread_pool.emplace_back(&CompactionJob::ProcessKeyValueCompaction, this,
+                               &compact_->sub_compact_states[i]);
+    }
+  }else{  //spandb
+    subcompact_num.store(compact_->sub_compact_states.size() - 1);
+    for (size_t i = 1; i < compact_->sub_compact_states.size(); i++){
+      auto fn = std::bind(&CompactionJob::ProcessKeyValueCompaction,
+                        this, &compact_->sub_compact_states[i]);
+      request_scheduler_->ScheduleSubcompaction(fn, &subcompact_num);
+    }
   }
 
   // Always schedule the first subcompaction (whether or not there are also
@@ -595,6 +605,8 @@ Status CompactionJob::Run() {
   for (auto& thread : thread_pool) {
     thread.join();
   }
+
+  while ((subcompact_num.load() != 0)){ }
 
   compaction_stats_.micros = env_->NowMicros() - start_micros;
   compaction_stats_.cpu_micros = 0;
@@ -671,14 +683,24 @@ Status CompactionJob::Run() {
         }
       }
     };
-    for (size_t i = 1; i < compact_->sub_compact_states.size(); i++) {
-      thread_pool.emplace_back(verify_table,
-                               std::ref(compact_->sub_compact_states[i].status));
+    if(request_scheduler_ == nullptr){
+      for (size_t i = 1; i < compact_->sub_compact_states.size(); i++) {
+        thread_pool.emplace_back(verify_table, std::ref(compact_->sub_compact_states[i].status));
+      }
+    }else{
+      subcompact_num.store(compact_->sub_compact_states.size() - 1);
+      for (size_t i = 1; i < compact_->sub_compact_states.size(); i++){
+        auto fn = std::bind(verify_table, std::ref(compact_->sub_compact_states[i].status));
+        request_scheduler_->ScheduleSubcompaction(fn, &subcompact_num);
+      }
     }
+
     verify_table(compact_->sub_compact_states[0].status);
     for (auto& thread : thread_pool) {
       thread.join();
     }
+    while(subcompact_num.load() != 0){ }
+
     for (const auto& state : compact_->sub_compact_states) {
       if (!state.status.ok()) {
         status = state.status;
@@ -714,6 +736,7 @@ Status CompactionJob::Install(const MutableCFOptions& mutable_cf_options) {
       ThreadStatus::STAGE_COMPACTION_INSTALL);
   db_mutex_->AssertHeld();
   Status status = compact_->status;
+
   ColumnFamilyData* cfd = compact_->compaction->column_family_data();
   cfd->internal_stats()->AddCompactionStats(
       compact_->compaction->output_level(), thread_pri_, compaction_stats_);
@@ -769,6 +792,7 @@ Status CompactionJob::Install(const MutableCFOptions& mutable_cf_options) {
   auto stream = event_logger_->LogToBuffer(log_buffer_);
   stream << "job" << job_id_ << "event"
          << "compaction_finished"
+         << "compaction_thread" << thread_local_info_.GetName()  //add for spandb
          << "compaction_time_micros" << compaction_stats_.micros
          << "compaction_time_cpu_micros" << compaction_stats_.cpu_micros
          << "output_level" << compact_->compaction->output_level()
@@ -861,8 +885,16 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
     prev_cpu_read_nanos = IOSTATS(cpu_read_nanos);
   }
 
+  Env* temp_env;
+  // if(compact_->compaction->level() <= db_options_.max_level)
+  if(compact_->compaction->level() <= spandb_controller_.GetMaxLevel())
+  {
+    temp_env=db_options_.lo_env;
+  }else{
+    temp_env=env_;
+  }
   MergeHelper merge(
-      env_, cfd->user_comparator(), cfd->ioptions()->merge_operator,
+      temp_env/*env_*/, cfd->user_comparator(), cfd->ioptions()->merge_operator,
       compaction_filter, db_options_.info_log.get(),
       false /* internal key corruption is expected */,
       existing_snapshots_.empty() ? 0 : existing_snapshots_.back(),
@@ -886,13 +918,32 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
   }
 
   Status status;
-  sub_compact->c_iter.reset(new CompactionIterator(
+  /*sub_compact->c_iter.reset(new CompactionIterator(
       input.get(), cfd->user_comparator(), &merge, versions_->LastSequence(),
       &existing_snapshots_, earliest_write_conflict_snapshot_,
       snapshot_checker_, env_, ShouldReportDetailedTime(env_, stats_), false,
       &range_del_agg, sub_compact->compaction, compaction_filter,
       shutting_down_, preserve_deletes_seqnum_, manual_compaction_paused_,
       db_options_.info_log));
+    */
+  if(sub_compact->compaction->output_level() <= spandb_controller_.GetMaxLevel()){
+  // if(sub_compact->compaction->output_level() <= db_options_.max_level){
+    sub_compact->c_iter.reset(new CompactionIterator(
+      input.get(), cfd->user_comparator(), &merge, versions_->LastSequence(),
+      &existing_snapshots_, earliest_write_conflict_snapshot_,
+      snapshot_checker_, db_options_.lo_env, ShouldReportDetailedTime(db_options_.lo_env, stats_), false,
+      &range_del_agg, sub_compact->compaction, compaction_filter,
+      shutting_down_, preserve_deletes_seqnum_, manual_compaction_paused_,
+      db_options_.info_log));
+  }else{
+        sub_compact->c_iter.reset(new CompactionIterator(
+      input.get(), cfd->user_comparator(), &merge, versions_->LastSequence(),
+      &existing_snapshots_, earliest_write_conflict_snapshot_,
+      snapshot_checker_, env_, ShouldReportDetailedTime(env_, stats_), false,
+      &range_del_agg, sub_compact->compaction, compaction_filter,
+      shutting_down_, preserve_deletes_seqnum_, manual_compaction_paused_,
+      db_options_.info_log));
+  }
   auto c_iter = sub_compact->c_iter.get();
   c_iter->SeekToFirst();
   if (c_iter->Valid() && sub_compact->compaction->output_level() != 0) {
@@ -1329,7 +1380,14 @@ Status CompactionJob::FinishCompactionOutputFile(
     std::string fname =
         TableFileName(sub_compact->compaction->immutable_cf_options()->cf_paths,
                       meta->fd.GetNumber(), meta->fd.GetPathId());
-    env_->DeleteFile(fname);
+    //env_->DeleteFile(fname);
+    // if(sub_compact->compaction->output_level()<=db_options_.max_level)
+    if(db_options_.lo_env->FileExists(fname).ok())
+    {
+      db_options_.lo_env->DeleteFile(fname);
+    }else{
+      env_->DeleteFile(fname);
+    }
 
     // Also need to remove the file from outputs, or it will be added to the
     // VersionEdit.
@@ -1463,7 +1521,23 @@ Status CompactionJob::OpenCompactionOutputFile(
   TEST_SYNC_POINT_CALLBACK("CompactionJob::OpenCompactionOutputFile",
                            &syncpoint_arg);
 #endif
-  Status s = NewWritableFile(env_, fname, &writable_file, env_options_);
+  //#add lo_env
+  //Status s = NewWritableFile(env_, fname, &writable_file, env_options_);
+  Status s;
+  if(sub_compact->compaction->output_level() <= spandb_controller_.GetMaxLevel())
+  // if(sub_compact->compaction->output_level() <= db_options_.max_level)
+  {
+    // s = NewWritableFile(db_options_.lo_env, fname, &writable_file, env_options_);
+    s = NewWritableFile(db_options_.lo_env, fname, &writable_file, env_options_, static_cast<size_t>(sub_compact->compaction->SpanDBOutputFilePreallocationSize()));
+    if(!s.ok()){
+      printf("create file on SPDK failed, turn to use default env\n");
+      s = NewWritableFile(env_, fname, &writable_file, env_options_);
+    }
+  }else
+  {
+    s = NewWritableFile(env_, fname, &writable_file, env_options_);
+  }
+  
   if (!s.ok()) {
     ROCKS_LOG_ERROR(
         db_options_.info_log,
@@ -1491,9 +1565,21 @@ Status CompactionJob::OpenCompactionOutputFile(
       sub_compact->compaction->OutputFilePreallocationSize()));
   const auto& listeners =
       sub_compact->compaction->immutable_cf_options()->listeners;
-  sub_compact->outfile.reset(
+  //#add lo_env
+  //sub_compact->outfile.reset(
+      //new WritableFileWriter(std::move(writable_file), fname, env_options_,
+      //                       env_, db_options_.statistics.get(), listeners));
+  if(sub_compact->compaction->output_level() <= spandb_controller_.GetMaxLevel()){
+  // if(sub_compact->compaction->output_level() <= db_options_.max_level){
+    sub_compact->outfile.reset(
+      new WritableFileWriter(std::move(writable_file), fname, env_options_,
+                             db_options_.lo_env, db_options_.statistics.get(), listeners));
+  }else{
+      sub_compact->outfile.reset(
       new WritableFileWriter(std::move(writable_file), fname, env_options_,
                              env_, db_options_.statistics.get(), listeners));
+  }
+
 
   // If the Column family flag is to only optimize filters for hits,
   // we can skip creating filters if this is the bottommost_level where

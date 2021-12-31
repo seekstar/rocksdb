@@ -245,6 +245,7 @@ class WriteBatchWithIndex : public WriteBatchBase {
  private:
   friend class PessimisticTransactionDB;
   friend class WritePreparedTxn;
+  friend class AsyncWritePreparedTxn; // add for async
   friend class WriteUnpreparedTxn;
   friend class WriteBatchWithIndex_SubBatchCnt_Test;
   // Returns the number of sub-batches inside the write batch. A sub-batch

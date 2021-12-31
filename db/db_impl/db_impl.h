@@ -62,6 +62,10 @@
 #include "util/stop_watch.h"
 #include "util/thread_local.h"
 
+#include "ssdlogging/spdk_logging_server.h"
+#include "ssdlogging/spdk_logging_recovery.h"
+#include "request_scheduler.h"  
+
 namespace rocksdb {
 
 class Arena;
@@ -178,6 +182,55 @@ class DBImpl : public DB {
     get_impl_options.get_value = false;
     return GetImpl(options, key, get_impl_options);
   }
+
+  //add for async
+  Status WillDelay(uint64_t num_bytes, bool &delayed);
+  void CreateRequestSchduler();
+  using DB::AsyncPut;
+  Status AsyncPut(const WriteOptions& options,
+                     ColumnFamilyHandle* column_family, const std::string key,
+                     const std::string value, std::atomic<Status *> &status) override;
+  
+  using DB::AsyncMerge;
+  Status AsyncMerge(const WriteOptions& options,
+                     ColumnFamilyHandle* column_family, const std::string key,
+                     const std::string value, std::atomic<Status *> &status) override;
+  
+  using DB::AsyncGet;
+  Status AsyncGet(const ReadOptions& options,
+                     ColumnFamilyHandle* column_family, const std::string key,
+                     std::string* value, std::atomic<Status *> &status) override;
+  
+  using DB::AsyncScan;
+  Status AsyncScan(const ReadOptions& options,
+                     ColumnFamilyHandle* column_family, const std::string key,
+                     std::string* value, const int length, std::atomic<Status *> &status) override;
+  
+  using DB::AsyncDelete;
+  Status AsyncDelete(const WriteOptions& options,
+                        ColumnFamilyHandle* column_family,
+                        const std::string key, std::atomic<Status *> &status) override;
+  
+  void UnscheduleCompaction(int num);                   
+
+  Status ProLog(const WriteOptions& options, WriteBatch* updates,
+                   WriteCallback* callback = nullptr,
+                   uint64_t* log_used = nullptr, uint64_t log_ref = 0,
+                   bool disable_memtable = false, uint64_t* seq_used = nullptr,
+                   size_t batch_cnt = 0,
+                   PreReleaseCallback* pre_release_callback = nullptr); 
+
+  Status BatchProLog(const WriteOptions& options, WriteBatch* updates,
+                   WriteCallback* callback = nullptr,
+                   uint64_t* log_used = nullptr, uint64_t log_ref = 0,
+                   bool disable_memtable = false, uint64_t* seq_used = nullptr,
+                   size_t batch_cnt = 0,
+                   PreReleaseCallback* pre_release_callback = nullptr);
+
+  Status BatchEPiLog(const WriteOptions& options, WriteBatch* my_batch, 
+                      uint64_t *seq_used, uint64_t *log_used);
+
+  bool IsWriteDelay(){ return begin_write_stall_.load(); }
 
   using DB::MultiGet;
   virtual std::vector<Status> MultiGet(
@@ -938,6 +991,7 @@ class DBImpl : public DB {
 
  protected:
   Env* const env_;
+  Env* lo_env_;
   const std::string dbname_;
   std::string db_id_;
   std::unique_ptr<VersionSet> versions_;
@@ -959,6 +1013,10 @@ class DBImpl : public DB {
   // logs_, logfile_number_. Refer to the definition of each variable below for
   // more description.
   mutable InstrumentedMutex mutex_;
+
+  std::mutex my_mutex_;
+  protected:
+
 
   ColumnFamilyHandleImpl* default_cf_handle_;
   InternalStats* default_cf_internal_stats_;
@@ -1056,6 +1114,40 @@ class DBImpl : public DB {
                    bool disable_memtable = false, uint64_t* seq_used = nullptr,
                    size_t batch_cnt = 0,
                    PreReleaseCallback* pre_release_callback = nullptr);
+  
+  Status WriteImplBeforeLogging(const WriteOptions& options, WriteBatch* updates,
+                   WriteCallback* callback = nullptr,
+                   uint64_t* log_used = nullptr, uint64_t log_ref = 0,
+                   bool disable_memtable = false, uint64_t* seq_used = nullptr,
+                   size_t batch_cnt = 0,
+                   PreReleaseCallback* pre_release_callback = nullptr);
+  
+  Status WriteImplAfterLogging(const WriteOptions& options, WriteBatch* updates,
+                   WriteCallback* callback = nullptr,
+                   uint64_t* log_used = nullptr, uint64_t log_ref = 0,
+                   bool disable_memtable = false, uint64_t* seq_used = nullptr,
+                   size_t batch_cnt = 0,
+                   PreReleaseCallback* pre_release_callback = nullptr);
+
+  bool GetFromMemtable(const ReadOptions& options,
+                         ColumnFamilyHandle* column_family, const Slice& key,
+                         PinnableSlice* value, std::atomic<Status*> &status);
+
+  void SPDKWriteWAL(WriteBatch* my_batch, void *ptr);
+
+  void* GetFromLogging();
+
+  bool AsyncFinishReading(int64_t seq);
+
+  void* AsyncGetFromLogging(int64_t &seq);
+
+  void* AsyncGetFromLoggingWithLock();
+
+  int LoggingQueueLength();
+
+  void StopLogging();
+
+  std::atomic<bool> begin_write_stall_;
 
   Status PipelinedWriteImpl(const WriteOptions& options, WriteBatch* updates,
                             WriteCallback* callback = nullptr,
@@ -1073,6 +1165,14 @@ class DBImpl : public DB {
   enum AssignOrder : bool { kDontAssignOrder, kDoAssignOrder };
   // Whether it requires publishing last sequence or not
   enum PublishLastSeq : bool { kDontPublishLastSeq, kDoPublishLastSeq };
+
+  // add for async
+  Status WriteImplWALOnlyForAsync(
+      WriteThread* write_thread, const WriteOptions& options,
+      WriteBatch* updates, WriteCallback* callback, uint64_t* log_used,
+      const uint64_t log_ref, uint64_t* seq_used, const size_t sub_batch_cnt,
+      PreReleaseCallback* pre_release_callback, const AssignOrder assign_order,
+      const PublishLastSeq publish_last_seq, const bool disable_memtable);
 
   // Join the write_thread to write the batch only to the WAL. It is the
   // responsibility of the caller to also write the write batch to the memtable
@@ -1117,6 +1217,11 @@ class DBImpl : public DB {
   friend class WriteBatchWithIndex;
   friend class WriteUnpreparedTxnDB;
   friend class WriteUnpreparedTxn;
+  friend class AsyncWriteCommittedTxn;  // add for async
+  friend class AsyncWriteCommittedTxnDB; // add for async
+  friend class RequestScheduler;  // add for async
+  friend class AsyncWritePreparedTxn;  // add for async
+  friend class AsyncWritePreparedTxnDB; // add for async
 
 #ifndef ROCKSDB_LITE
   friend class ForwardIterator;
@@ -1257,6 +1362,9 @@ class DBImpl : public DB {
     std::unique_ptr<TaskLimiterToken> task_token;
   };
 
+  bool log_flags[10000];
+
+
   struct CompactionArg {
     // caller retains ownership of `db`.
     DBImpl* db;
@@ -1346,6 +1454,9 @@ class DBImpl : public DB {
   Status RecoverLogFiles(const std::vector<uint64_t>& log_numbers,
                          SequenceNumber* next_sequence, bool read_only);
 
+  //spandb
+  Status SPDKLoggingRecover(SequenceNumber* next_sequence, bool read_only, const std::vector<uint64_t>& log_numbers);
+
   // The following two methods are used to flush a memtable to
   // storage. The first one is used at database RecoveryTime (when the
   // database is opened) and is heavyweight because it holds the mutex
@@ -1418,6 +1529,16 @@ class DBImpl : public DB {
       mutex_.Unlock();
       write_thread_.WaitForMemTableWriters();
       mutex_.Lock();
+    }
+
+    // spandb
+    if(immutable_db_options_.enable_spdklogging){
+      if (pending_memtable_writes_.load() != 0) {
+        std::unique_lock<std::mutex> guard(switch_mutex_);
+        switch_cv_.wait(guard,
+                        [&] { return pending_memtable_writes_.load() == 0; });
+      }
+      return;
     }
 
     if (!immutable_db_options_.unordered_write) {
@@ -1686,7 +1807,8 @@ class DBImpl : public DB {
   // two_write_queues writes, where it can be updated in different threads,
   // read and writes are protected by log_write_mutex_ instead. This is to avoid
   // expesnive mutex_ lock during WAL write, which update log_empty_.
-  bool log_empty_;
+  // bool log_empty_;
+  std::atomic<bool> log_empty_;
 
   ColumnFamilyHandleImpl* persist_stats_cf_handle_;
 
@@ -1713,6 +1835,10 @@ class DBImpl : public DB {
   //  - it follows that the items with getting_synced=true can be safely read
   //  from the same thread that has set getting_synced=true
   std::deque<LogWriterNumber> logs_;
+
+  ssdlogging::SPDKLoggingServer *spdk_logging_server_ = nullptr;
+  ssdlogging::SSDLoggingRecovery *spdk_recovery_ = nullptr;
+
   // Signaled when getting_synced becomes false for some of the logs_.
   InstrumentedCondVar log_sync_cv_;
   // This is the app-level state that is written to the WAL but will be used

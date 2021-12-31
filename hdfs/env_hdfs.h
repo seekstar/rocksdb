@@ -44,6 +44,7 @@ private:
 class HdfsEnv : public Env {
 
  public:
+  using Env::NewWritableFile;
   explicit HdfsEnv(const std::string& fsname) : fsname_(fsname) {
     posixEnv = Env::Default();
     fileSys_ = connectToPath(fsname_);
@@ -242,6 +243,7 @@ static const Status notsup;
 class HdfsEnv : public Env {
 
  public:
+  using Env::NewWritableFile;
   explicit HdfsEnv(const std::string& /*fsname*/) {
     fprintf(stderr, "You have not build rocksdb with HDFS support\n");
     fprintf(stderr, "Please see hdfs/README for details\n");

@@ -147,6 +147,11 @@ struct PerfContext {
   //
   // total nanos spent on writing to WAL
   uint64_t write_wal_time;
+
+  // add for ssdlogging
+  uint64_t ssdlogging_time;
+  uint64_t complete_parallel_memtable_time;
+
   // total nanos spent on writing to mem tables
   uint64_t write_memtable_time;
   // total nanos spent on delaying or throttling write

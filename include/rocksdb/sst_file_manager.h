@@ -111,7 +111,7 @@ class SstFileManager {
 //    files already renamed as a trash may be partial, so users should not
 //    directly recover them without checking.
 extern SstFileManager* NewSstFileManager(
-    Env* env, std::shared_ptr<Logger> info_log = nullptr,
+    Env* env, Env* lo_env, std::shared_ptr<Logger> info_log = nullptr,
     std::string trash_dir = "", int64_t rate_bytes_per_sec = 0,
     bool delete_existing_trash = true, Status* status = nullptr,
     double max_trash_db_ratio = 0.25,

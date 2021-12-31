@@ -34,6 +34,19 @@
 
 cmake_minimum_required(VERSION 3.5.1)
 
+
+set(CMAKE_INSTALL_LIBDIR lib64)
+option(SPANDB_STAT "SpanDB statistics" OFF)
+if(SPANDB_STAT)
+  add_definitions(-DSPANDB_STAT)
+endif()
+
+if(NOT DEFINED ENV{DPDK_LIB})
+    message(FATAL_ERROR "not defined environment variable:DPDK_LIB")  
+endif()
+link_directories($ENV{DPDK_LIB})
+link_directories($ENV{SPDK_HOME}/isa-l/.libs/)
+
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/cmake/modules/")
 include(ReadVersion)
 get_rocksdb_version(rocksdb_VERSION)
@@ -161,6 +174,7 @@ if(WIN32 AND MSVC)
     set(RUNTIME_LIBRARY "MT")
   endif()
 endif()
+
 
 set(BUILD_VERSION_CC ${CMAKE_BINARY_DIR}/build_version.cc)
 configure_file(util/build_version.cc.in ${BUILD_VERSION_CC} @ONLY)
@@ -546,6 +560,8 @@ set(SOURCES
         env/env_encryption.cc
         env/env_hdfs.cc
         env/mock_env.cc
+        env/spdk_env.cc
+        env/io_spdk.h
         file/delete_scheduler.cc
         file/file_prefetch_buffer.cc
         file/file_util.cc
@@ -708,9 +724,18 @@ set(SOURCES
         utilities/transactions/write_prepared_txn_db.cc
         utilities/transactions/write_unprepared_txn.cc
         utilities/transactions/write_unprepared_txn_db.cc
+        utilities/transactions/async_write_committed_txn_db.cc
+        utilities/transactions/async_write_committed_txn.cc
+        utilities/transactions/async_write_prepared_txn.cc
+        utilities/transactions/async_write_prepared_txn_db.cc
+        db/db_impl/request_scheduler.cc
+        db/db_impl/db_impl_async.cc
         utilities/ttl/db_ttl_impl.cc
         utilities/write_batch_with_index/write_batch_with_index.cc
         utilities/write_batch_with_index/write_batch_with_index_internal.cc
+        ssdlogging/spdk_logging_server.cc
+        ssdlogging/spdk_logging_recovery.cc
+        ssdlogging/spdk_device.cc
         $<TARGET_OBJECTS:build_version>)
 
 if(HAVE_SSE42 AND NOT MSVC)
@@ -753,6 +778,7 @@ else()
   list(APPEND SOURCES
     port/port_posix.cc
     env/env_posix.cc
+    env/env_posix2d.cc
     env/io_posix.cc)
 endif()
 
@@ -797,6 +823,29 @@ endif()
 add_library(${ROCKSDB_STATIC_LIB} STATIC ${SOURCES})
 target_link_libraries(${ROCKSDB_STATIC_LIB}
   ${THIRDPARTY_LIBS} ${SYSTEM_LIBS})
+
+
+set(SPDK_LIBS spdk  spdk_bdev_malloc spdk_blob  spdk_event spdk_event_vhost  spdk_log_rpc  spdk_scsi 
+spdk_virtio spdk_app_rpc spdk_bdev_null  spdk_blob_bdev spdk_event_bdev spdk_event_vmd 
+spdk_lvol spdk_sock spdk_vmd spdk_bdev spdk_bdev_nvme  spdk_blobfs 
+spdk_ftl  spdk_nbd  spdk_sock_posix spdk_bdev_aio spdk_bdev_passthru  spdk_blobfs_bdev 
+spdk_event_iscsi  spdk_ioat  spdk_net  spdk_thread spdk_bdev_delay  spdk_bdev_raid 
+spdk_conf  spdk_event_nbd spdk_iscsi spdk_notify spdk_trace spdk_bdev_error  spdk_bdev_rpc 
+spdk_event_net spdk_json  spdk_nvme  spdk_bdev_gpt spdk_bdev_split 
+spdk_event_nvmf spdk_jsonrpc  spdk_nvmf spdk_util spdk_bdev_lvol 
+spdk_bdev_virtio spdk_env_dpdk spdk_event_scsi spdk_log  spdk_rpc  spdk_vhost spdk_bdev_ftl)
+
+set(DPDK_LIBS dpdk rte_bus_vdev rte_compressdev rte_eal rte_hash   rte_mbuf rte_mempool_bucket rte_meter rte_pci  rte_vhost
+    rte_bus_pci rte_cmdline  rte_cryptodev rte_ethdev rte_kvargs rte_mempool rte_mempool_ring   rte_net   rte_ring rte_rib rte_fib)
+
+if(NOT DEFINED ENV{DPDK_INCLUDE})
+    message(FATAL_ERROR "not defined environment variable:DPDK_INCLUDE")  
+endif()
+target_include_directories(${ROCKSDB_SHARED_LIB} PRIVATE $ENV{DPDK_INCLUDE})
+target_link_libraries(${ROCKSDB_SHARED_LIB}  ${SPDK_LIBS} ${DPDK_LIBS})
+target_link_libraries(${ROCKSDB_SHARED_LIB} dl numa isal)
+target_link_libraries(${ROCKSDB_SHARED_LIB} tbb)
+
 
 if(WIN32)
   add_library(${ROCKSDB_IMPORT_LIB} SHARED ${SOURCES})

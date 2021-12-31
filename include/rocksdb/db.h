@@ -316,6 +316,47 @@ class DB {
     return Put(options, DefaultColumnFamily(), key, value);
   }
 
+  //add for async
+  virtual Status AsyncPut(const WriteOptions& options, const std::string key,
+                     const std::string value, std::atomic<Status *> &status) {
+    return AsyncPut(options, DefaultColumnFamily(), key, value, status);
+  }
+  virtual Status AsyncPut(const WriteOptions& options,
+                     ColumnFamilyHandle* column_family, const std::string key,
+                     const std::string value, std::atomic<Status *> &status){ return Status::OK();}
+
+  virtual Status AsyncMerge(const WriteOptions& options, const std::string key,
+                     const std::string value, std::atomic<Status *> &status) {
+    return AsyncMerge(options, DefaultColumnFamily(), key, value, status);
+  }
+  virtual Status AsyncMerge(const WriteOptions& options,
+                     ColumnFamilyHandle* column_family, const std::string key,
+                     const std::string value, std::atomic<Status *> &status){ return Status::OK();}
+
+  virtual Status AsyncGet(const ReadOptions& options, const std::string key,
+                     std::string* value, std::atomic<Status *> &status){return AsyncGet(options, DefaultColumnFamily(), key, value, status);}  
+
+  virtual Status AsyncGet(const ReadOptions& options,
+                     ColumnFamilyHandle* column_family, const std::string key,
+                     std::string* value, std::atomic<Status *> &status){ return Get(options, column_family, key, value); }
+
+  virtual Status AsyncScan(const ReadOptions& options, const std::string key,
+                     std::string* value, const int length, std::atomic<Status *> &status){
+      return AsyncScan(options, DefaultColumnFamily(), key, value, length, status);
+  }  
+
+  virtual Status AsyncScan(const ReadOptions& options,
+                     ColumnFamilyHandle* column_family, const std::string key,
+                     std::string* value, const int length, std::atomic<Status *> &status){ return Status::OK(); }
+
+  virtual Status AsyncDelete(const WriteOptions& options, const std::string key, std::atomic<Status *> &status) {
+    return AsyncDelete(options, DefaultColumnFamily(), key, status);
+  }
+
+  virtual Status AsyncDelete(const WriteOptions& options,
+                        ColumnFamilyHandle* column_family,
+                        const std::string key, std::atomic<Status *> &status){return Delete(options, DefaultColumnFamily(), key);}          
+
   // Remove the database entry (if any) for "key".  Returns OK on
   // success, and a non-OK status on error.  It is not an error if "key"
   // did not exist in the database.

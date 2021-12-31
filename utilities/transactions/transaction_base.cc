@@ -309,13 +309,11 @@ std::vector<Status> TransactionBaseImpl::MultiGet(
     const std::vector<Slice>& keys, std::vector<std::string>* values) {
   size_t num_keys = keys.size();
   values->resize(num_keys);
-
   std::vector<Status> stat_list(num_keys);
   for (size_t i = 0; i < num_keys; ++i) {
     std::string* value = values ? &(*values)[i] : nullptr;
     stat_list[i] = Get(read_options, column_family[i], keys[i], value);
   }
-
   return stat_list;
 }
 

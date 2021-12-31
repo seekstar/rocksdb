@@ -108,7 +108,8 @@ class FlushJob {
   // equal to *max_memtable_id_ will be selected for flush. If null, then all
   // memtables in the column family will be selected.
   const uint64_t* max_memtable_id_;
-  const EnvOptions env_options_;
+  // const EnvOptions env_options_;
+  const EnvOptions &env_options_;
   VersionSet* versions_;
   InstrumentedMutex* db_mutex_;
   std::atomic<bool>* shutting_down_;

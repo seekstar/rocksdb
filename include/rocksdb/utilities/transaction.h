@@ -142,6 +142,45 @@ class Transaction {
   // TransactionOptions.expiration.
   virtual Status Commit() = 0;
 
+  // add for async transaction (override in async transaction)
+  virtual bool IsFinished(){return true;}
+  virtual Status AsyncCommit(){return Commit();}
+
+  virtual Status AsyncGetV2(const ReadOptions& options,
+                     ColumnFamilyHandle* column_family, const std::string key,
+                     std::string* value, bool *finished){return Status::NotSupported("Not supported in current transaction mode"); }
+
+  virtual Status AsyncGetV2(const ReadOptions& options, const std::string key,
+                     std::string* value, bool *finished){return Get(options, key, value);}
+
+  virtual Status AsyncGet(const ReadOptions& options,
+                     ColumnFamilyHandle* column_family, const std::string key,
+                     std::string* value, std::atomic<Status *> &status){return Status::NotSupported("Not supported in current transaction mode");}
+
+  virtual Status AsyncGet(const ReadOptions& options, const std::string key,
+                     std::string* value, std::atomic<Status *> &status){return Status::NotSupported("Not supported in current transaction mode");}
+  
+  virtual Status AsyncMultiGet(
+      const ReadOptions& options,
+      ColumnFamilyHandle* column_family,
+      const std::vector<std::string> keys,
+      std::vector<std::string>* values,
+      std::vector<Status>* statuses, std::atomic<Status *> &status, bool check_queue){return Status::NotSupported("Not supported in current transaction mode");}
+
+  virtual Status AsyncScan(const ReadOptions& options, const std::string key,
+                     std::string* value, const int length, std::atomic<Status *> &status){return Status::NotSupported("Not supported in current transaction mode");}  
+
+  virtual Status AsyncScan(const ReadOptions& options,
+                     ColumnFamilyHandle* column_family, const std::string key,
+                     std::string* value, const int length, std::atomic<Status *> &status){return Status::NotSupported("Not supported in current transaction mode"); }
+
+  virtual Status AsyncGetIterator(const ReadOptions& read_options, Iterator *&iterator, std::atomic<Status *> &status) {
+                      return Status::NotSupported("Not supported in current transaction mode"); }
+
+  virtual Status AsyncGetIterator(const ReadOptions& read_options, ColumnFamilyHandle* column_family,
+                                Iterator *&iterator, std::atomic<Status *> &status) {
+                      return Status::NotSupported("Not supported in current transaction mode"); }
+
   // Discard all batched writes in this transaction.
   virtual Status Rollback() = 0;
 

@@ -28,7 +28,9 @@ enum TxnDBWritePolicy {
   // TODO(myabandeh): Not implemented yet
   WRITE_PREPARED,  // write data after the prepare phase of 2pc
   // TODO(myabandeh): Not implemented yet
-  WRITE_UNPREPARED  // write data before the prepare phase of 2pc
+  WRITE_UNPREPARED,  // write data before the prepare phase of 2pc
+  ASYNC_WRITE_COMMITTED, // add for async
+  ASYNC_WRITE_PREPARED // add for async
 };
 
 const uint32_t kInitialMaxDeadlocks = 5;
@@ -117,6 +119,7 @@ struct TransactionDBOptions {
   bool autogenerate_name = false;
 
   friend class WritePreparedTxnDB;
+  friend class AsyncWritePreparedTxnDB; // add for async
   friend class WriteUnpreparedTxn;
   friend class WritePreparedTransactionTestBase;
   friend class TransactionTestBase;

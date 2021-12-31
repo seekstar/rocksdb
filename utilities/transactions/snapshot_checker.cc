@@ -10,6 +10,7 @@
 #endif  // ROCKSDB_LITE
 
 #include "utilities/transactions/write_prepared_txn_db.h"
+#include "utilities/transactions/async_write_prepared_txn_db.h"
 
 namespace rocksdb {
 
@@ -18,6 +19,17 @@ WritePreparedSnapshotChecker::WritePreparedSnapshotChecker(
     WritePreparedTxnDB* /*txn_db*/) {}
 
 SnapshotCheckerResult WritePreparedSnapshotChecker::CheckInSnapshot(
+    SequenceNumber /*sequence*/, SequenceNumber /*snapshot_sequence*/) const {
+  // Should never be called in LITE mode.
+  assert(false);
+  return SnapshotCheckerResult::kInSnapshot;
+}
+
+//add for async
+AsyncWritePreparedSnapshotChecker::AsyncWritePreparedSnapshotChecker(
+    AsyncWritePreparedTxnDB* /*txn_db*/) {}
+
+SnapshotCheckerResult AsyncWritePreparedSnapshotChecker::CheckInSnapshot(
     SequenceNumber /*sequence*/, SequenceNumber /*snapshot_sequence*/) const {
   // Should never be called in LITE mode.
   assert(false);
@@ -42,6 +54,25 @@ SnapshotCheckerResult WritePreparedSnapshotChecker::CheckInSnapshot(
   return in_snapshot ? SnapshotCheckerResult::kInSnapshot
                      : SnapshotCheckerResult::kNotInSnapshot;
 }
+
+//add for async
+AsyncWritePreparedSnapshotChecker::AsyncWritePreparedSnapshotChecker(
+    AsyncWritePreparedTxnDB* txn_db)
+    : txn_db_(txn_db){};
+
+SnapshotCheckerResult AsyncWritePreparedSnapshotChecker::CheckInSnapshot(
+    SequenceNumber sequence, SequenceNumber snapshot_sequence) const {
+  bool snapshot_released = false;
+  // TODO(myabandeh): set min_uncommitted
+  bool in_snapshot = txn_db_->IsInSnapshot(
+      sequence, snapshot_sequence, kMinUnCommittedSeq, &snapshot_released);
+  if (snapshot_released) {
+    return SnapshotCheckerResult::kSnapshotReleased;
+  }
+  return in_snapshot ? SnapshotCheckerResult::kInSnapshot
+                     : SnapshotCheckerResult::kNotInSnapshot;
+}
+//end add for async
 
 #endif  // ROCKSDB_LITE
 DisableGCSnapshotChecker DisableGCSnapshotChecker::instance_;

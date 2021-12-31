@@ -76,7 +76,6 @@ enum CompressionType : unsigned char {
   kDisableCompressionOption = 0xff,
 };
 
-struct Options;
 struct DbPath;
 
 struct ColumnFamilyOptions : public AdvancedColumnFamilyOptions {
@@ -371,6 +370,23 @@ struct DBOptions {
   // Default: false
   bool create_if_missing = false;
 
+  // spandb
+  bool enable_spdklogging = false;
+  bool transactional_mode = false;
+  int ssdlogging_num = 0;
+  int l0_queue_num = 0;
+  std::string ssdlogging_path;
+  std::string ssdlogging_type = "default";
+  bool spdk_recovery = false;
+  uint64_t last_logging_lpn = 0;
+  int logging_server_num = 0;
+  int before_server_num = 0;
+  int after_server_num = 0;
+  int spandb_worker_num = 0;
+  int max_read_que_length = 1;
+  bool auto_config = false;
+  bool dynamic_moving = false;
+
   // If true, missing column families will be automatically created.
   // Default: false
   bool create_missing_column_families = false;
@@ -391,6 +407,12 @@ struct DBOptions {
   // e.g. to read/write files, schedule background work, etc.
   // Default: Env::Default()
   Env* env = Env::Default();
+
+  //add new env
+  Env *lo_env = Env::Default();
+  int max_level=0; // max level for spdk
+  std::string lo_path;//add for lo_env
+  int topfs_cache_size = 1;
 
   // Use to control write rate of flush and compaction. Flush has higher
   // priority than compaction. Rate limiting is disabled if nullptr.

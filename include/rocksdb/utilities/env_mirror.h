@@ -36,6 +36,7 @@ class EnvMirror : public EnvWrapper {
   bool free_a_, free_b_;
 
  public:
+  using EnvWrapper::NewWritableFile;
   EnvMirror(Env* a, Env* b, bool free_a = false, bool free_b = false)
       : EnvWrapper(a), a_(a), b_(b), free_a_(free_a), free_b_(free_b) {}
   ~EnvMirror() {

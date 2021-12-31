@@ -146,9 +146,12 @@ Status DBImpl::FlushMemTableToOutputFile(
   assert(cfd->imm()->NumNotFlushed() != 0);
   assert(cfd->imm()->IsFlushPending());
 
+  //add for l0
+  EnvOptions env_options = env_options_for_compaction_;
+
   FlushJob flush_job(
       dbname_, cfd, immutable_db_options_, mutable_cf_options,
-      nullptr /* memtable_id */, env_options_for_compaction_, versions_.get(),
+      nullptr /* memtable_id */, env_options /*env_options_for_compaction_*/, versions_.get(),
       &mutex_, &shutting_down_, snapshot_seqs, earliest_write_conflict_snapshot,
       snapshot_checker, job_context, log_buffer, directories_.GetDbDir(),
       GetDataDir(cfd, 0U),
@@ -161,6 +164,10 @@ Status DBImpl::FlushMemTableToOutputFile(
   TEST_SYNC_POINT("DBImpl::FlushMemTableToOutputFile:BeforePickMemtables");
   flush_job.PickMemTable();
   TEST_SYNC_POINT("DBImpl::FlushMemTableToOutputFile:AfterPickMemtables");
+
+  // printf("%ld x %ld = %ld\n", flush_job.GetMemTables().size(), mutable_cf_options.write_buffer_size, 
+  //       flush_job.GetMemTables().size() * mutable_cf_options.write_buffer_size);
+  env_options.allocate_size = flush_job.GetMemTables().size() * mutable_cf_options.write_buffer_size;
 
 #ifndef ROCKSDB_LITE
   // may temporarily unlock and lock the mutex.
@@ -1045,8 +1052,8 @@ Status DBImpl::CompactFilesImpl(
   }
 
   c.reset();
-
   bg_compaction_scheduled_--;
+
   if (bg_compaction_scheduled_ == 0) {
     bg_cv_.SignalAll();
   }
@@ -1485,8 +1492,16 @@ Status DBImpl::RunManualCompaction(
       }
       manual.incomplete = false;
       bg_compaction_scheduled_++;
-      env_->Schedule(&DBImpl::BGWorkCompaction, ca, Env::Priority::LOW, this,
-                     &DBImpl::UnscheduleCompactionCallback);
+      if(immutable_db_options_.auto_config && request_scheduler_ != nullptr){
+        request_scheduler_->Schedule(&DBImpl::BGWorkCompaction, ca, Env::Priority::LOW, this,
+                                     &DBImpl::UnscheduleCompactionCallback);
+      }else if(immutable_db_options_.auto_config && immutable_db_options_.transactional_mode){
+        spandb_controller_.Schedule(&DBImpl::BGWorkCompaction, ca, Env::Priority::LOW, this,
+                                     &DBImpl::UnscheduleCompactionCallback);
+      }else{
+        env_->Schedule(&DBImpl::BGWorkCompaction, ca, Env::Priority::LOW, this,
+                       &DBImpl::UnscheduleCompactionCallback);
+      }
       scheduled = true;
     }
   }
@@ -1901,8 +1916,16 @@ void DBImpl::MaybeScheduleFlushOrCompaction() {
     FlushThreadArg* fta = new FlushThreadArg;
     fta->db_ = this;
     fta->thread_pri_ = Env::Priority::HIGH;
-    env_->Schedule(&DBImpl::BGWorkFlush, fta, Env::Priority::HIGH, this,
-                   &DBImpl::UnscheduleFlushCallback);
+    if(immutable_db_options_.auto_config && request_scheduler_ != nullptr){
+      request_scheduler_->Schedule(&DBImpl::BGWorkFlush, fta, Env::Priority::HIGH, this,
+                                   &DBImpl::UnscheduleFlushCallback);
+    }else if(immutable_db_options_.auto_config && immutable_db_options_.transactional_mode){
+      spandb_controller_.Schedule(&DBImpl::BGWorkFlush, fta, Env::Priority::HIGH, this,
+                                    &DBImpl::UnscheduleFlushCallback);
+    }else{
+      env_->Schedule(&DBImpl::BGWorkFlush, fta, Env::Priority::HIGH, this,
+                     &DBImpl::UnscheduleFlushCallback);
+    }
   }
 
   // special case -- if high-pri (flush) thread pool is empty, then schedule
@@ -1910,13 +1933,23 @@ void DBImpl::MaybeScheduleFlushOrCompaction() {
   if (is_flush_pool_empty) {
     while (unscheduled_flushes_ > 0 &&
            bg_flush_scheduled_ + bg_compaction_scheduled_ <
-               bg_job_limits.max_flushes) {
+          bg_job_limits.max_flushes) {
       bg_flush_scheduled_++;
       FlushThreadArg* fta = new FlushThreadArg;
       fta->db_ = this;
       fta->thread_pri_ = Env::Priority::LOW;
-      env_->Schedule(&DBImpl::BGWorkFlush, fta, Env::Priority::LOW, this,
-                     &DBImpl::UnscheduleFlushCallback);
+      if(immutable_db_options_.auto_config && request_scheduler_ != nullptr){
+        fta->thread_pri_ = Env::Priority::HIGH;
+        request_scheduler_->Schedule(&DBImpl::BGWorkFlush, fta, Env::Priority::HIGH, this,
+                                    &DBImpl::UnscheduleFlushCallback);
+      }else if(immutable_db_options_.auto_config && immutable_db_options_.transactional_mode){
+        fta->thread_pri_ = Env::Priority::HIGH;
+        spandb_controller_.Schedule(&DBImpl::BGWorkFlush, fta, Env::Priority::HIGH, this,
+                                    &DBImpl::UnscheduleFlushCallback);
+      }else{
+        env_->Schedule(&DBImpl::BGWorkFlush, fta, Env::Priority::LOW, this,
+                      &DBImpl::UnscheduleFlushCallback);
+      }
     }
   }
 
@@ -1945,8 +1978,18 @@ void DBImpl::MaybeScheduleFlushOrCompaction() {
     ca->prepicked_compaction = nullptr;
     bg_compaction_scheduled_++;
     unscheduled_compactions_--;
-    env_->Schedule(&DBImpl::BGWorkCompaction, ca, Env::Priority::LOW, this,
-                   &DBImpl::UnscheduleCompactionCallback);
+    // env_->Schedule(&DBImpl::BGWorkCompaction, ca, Env::Priority::LOW, this,
+    //                &DBImpl::UnscheduleCompactionCallback);
+    if(immutable_db_options_.auto_config && request_scheduler_ != nullptr){
+      request_scheduler_->Schedule(&DBImpl::BGWorkCompaction, ca, Env::Priority::LOW, this,
+                                   &DBImpl::UnscheduleCompactionCallback);
+    }else if(immutable_db_options_.auto_config && immutable_db_options_.transactional_mode){
+        spandb_controller_.Schedule(&DBImpl::BGWorkCompaction, ca, Env::Priority::LOW, this,
+                                    &DBImpl::UnscheduleCompactionCallback);
+    }else{
+      env_->Schedule(&DBImpl::BGWorkCompaction, ca, Env::Priority::LOW, this,
+                     &DBImpl::UnscheduleCompactionCallback);
+    }
   }
 }
 
@@ -1963,6 +2006,17 @@ DBImpl::BGJobLimits DBImpl::GetBGJobLimits(int max_background_flushes,
                                            int max_background_jobs,
                                            bool parallelize_compactions) {
   BGJobLimits res;
+
+  if(spandb_controller_.GetAutoConfig()){
+    res.max_flushes = std::max(1, spandb_controller_.GetMaxFlushJobs());
+    if(parallelize_compactions || spandb_controller_.NeddSpeedupCompaction()){
+      res.max_compactions = std::max(1, spandb_controller_.GetMaxCompactionJobs());
+    }else{
+      res.max_compactions = 1;
+    }
+    return res;
+  }
+ 
   if (max_background_flushes == -1 && max_background_compactions == -1) {
     // for our first stab implementing max_background_jobs, simply allocate a
     // quarter of the threads to flushes.
@@ -2051,6 +2105,7 @@ void DBImpl::SchedulePendingCompaction(ColumnFamilyData* cfd) {
   if (!cfd->queued_for_compaction() && cfd->NeedsCompaction()) {
     AddToCompactionQueue(cfd);
     ++unscheduled_compactions_;
+    //printf("thread: %s increase unschedule at 3, %d\n", thread_role_.c_str(), unscheduled_compactions_);
   }
 }
 
@@ -2304,7 +2359,7 @@ void DBImpl::BackgroundCallCompaction(PrepickedCompaction* prepicked_compaction,
             CaptureCurrentFileNumberInPendingOutputs()));
 
     assert((bg_thread_pri == Env::Priority::BOTTOM &&
-            bg_bottom_compaction_scheduled_) ||
+            bg_bottom_compaction_scheduled_) || (bg_thread_pri == Env::Priority::LOW) ||
            (bg_thread_pri == Env::Priority::LOW && bg_compaction_scheduled_));
     Status s = BackgroundCompaction(&made_progress, &job_context, &log_buffer,
                                     prepicked_compaction, bg_thread_pri);
@@ -2562,6 +2617,7 @@ Status DBImpl::BackgroundCompaction(bool* made_progress,
                                        *(c->mutable_cf_options()));
           AddToCompactionQueue(cfd);
           ++unscheduled_compactions_;
+          //printf("thread: %s increase unschedule at 6, %d\n", thread_role_.c_str(), unscheduled_compactions_);
 
           c.reset();
           // Don't need to sleep here, because BackgroundCallCompaction
@@ -2719,8 +2775,18 @@ Status DBImpl::BackgroundCompaction(bool* made_progress,
     // Transfer requested token, so it doesn't need to do it again.
     ca->prepicked_compaction->task_token = std::move(task_token);
     ++bg_bottom_compaction_scheduled_;
-    env_->Schedule(&DBImpl::BGWorkBottomCompaction, ca, Env::Priority::BOTTOM,
-                   this, &DBImpl::UnscheduleCompactionCallback);
+    // env_->Schedule(&DBImpl::BGWorkBottomCompaction, ca, Env::Priority::BOTTOM,
+    //                this, &DBImpl::UnscheduleCompactionCallback);
+    if(immutable_db_options_.auto_config && request_scheduler_ != nullptr){
+        request_scheduler_->Schedule(&DBImpl::BGWorkBottomCompaction, ca, Env::Priority::LOW,
+                                     this, &DBImpl::UnscheduleCompactionCallback);
+    }else if(immutable_db_options_.auto_config && immutable_db_options_.transactional_mode){
+        spandb_controller_.Schedule(&DBImpl::BGWorkBottomCompaction, ca, Env::Priority::LOW,
+                                    this, &DBImpl::UnscheduleCompactionCallback);
+    }else{
+      env_->Schedule(&DBImpl::BGWorkBottomCompaction, ca, Env::Priority::BOTTOM,
+                     this, &DBImpl::UnscheduleCompactionCallback);
+    }
   } else {
     TEST_SYNC_POINT_CALLBACK("DBImpl::BackgroundCompaction:BeforeCompaction",
                              c->column_family_data());

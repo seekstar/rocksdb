@@ -24,6 +24,9 @@
 #include "utilities/transactions/write_prepared_txn_db.h"
 #include "utilities/transactions/write_unprepared_txn_db.h"
 
+#include "utilities/transactions/async_write_committed_txn_db.h" // add for async
+#include "utilities/transactions/async_write_prepared_txn_db.h" // add for async
+
 namespace rocksdb {
 
 PessimisticTransactionDB::PessimisticTransactionDB(
@@ -142,7 +145,12 @@ Status PessimisticTransactionDB::Initialize(
     assert(real_trx);
     real_trx->SetLogNumber(batch_info.log_number_);
     assert(seq != kMaxSequenceNumber);
-    if (GetTxnDBOptions().write_policy != WRITE_COMMITTED) {
+    /*if (GetTxnDBOptions().write_policy != WRITE_COMMITTED) {
+      real_trx->SetId(seq);
+    }*/
+    // add for async
+    if (GetTxnDBOptions().write_policy != WRITE_COMMITTED || 
+            GetTxnDBOptions().write_policy != ASYNC_WRITE_COMMITTED) {
       real_trx->SetId(seq);
     }
 
@@ -235,6 +243,14 @@ Status TransactionDB::Open(
         "two_write_queues is not enabled.");
   }
 
+  //add for async
+  if (txn_db_options.write_policy == ASYNC_WRITE_PREPARED &&
+      db_options.unordered_write && !db_options.two_write_queues) {
+    return Status::NotSupported(
+        "WRITE_PREPARED is incompatible with unordered_writes if "
+        "two_write_queues is not enabled.");
+  }
+
   std::vector<ColumnFamilyDescriptor> column_families_copy = column_families;
   std::vector<size_t> compaction_enabled_cf_indices;
   DBOptions db_options_2pc = db_options;
@@ -242,10 +258,13 @@ Status TransactionDB::Open(
               &compaction_enabled_cf_indices);
   const bool use_seq_per_batch =
       txn_db_options.write_policy == WRITE_PREPARED ||
-      txn_db_options.write_policy == WRITE_UNPREPARED;
+      txn_db_options.write_policy == WRITE_UNPREPARED ||
+      txn_db_options.write_policy == ASYNC_WRITE_PREPARED;  // add for async
   const bool use_batch_per_txn =
       txn_db_options.write_policy == WRITE_COMMITTED ||
-      txn_db_options.write_policy == WRITE_PREPARED;
+      txn_db_options.write_policy == WRITE_PREPARED ||
+      txn_db_options.write_policy == ASYNC_WRITE_PREPARED ||  // add for async
+      txn_db_options.write_policy == ASYNC_WRITE_COMMITTED; // add for async
   s = DBImpl::Open(db_options_2pc, dbname, column_families_copy, handles, &db,
                    use_seq_per_batch, use_batch_per_txn);
   if (s.ok()) {
@@ -305,6 +324,14 @@ Status TransactionDB::WrapDB(
       txn_db.reset(new WritePreparedTxnDB(
           db, PessimisticTransactionDB::ValidateTxnDBOptions(txn_db_options)));
       break;
+    case ASYNC_WRITE_COMMITTED: // add for async
+      txn_db.reset(new AsyncWriteCommittedTxnDB(
+          db, PessimisticTransactionDB::ValidateTxnDBOptions(txn_db_options)));
+      break;
+    case ASYNC_WRITE_PREPARED: // add for async
+      txn_db.reset(new AsyncWritePreparedTxnDB(
+          db, PessimisticTransactionDB::ValidateTxnDBOptions(txn_db_options)));
+      break;
     case WRITE_COMMITTED:
     default:
       txn_db.reset(new WriteCommittedTxnDB(
@@ -338,6 +365,14 @@ Status TransactionDB::WrapStackableDB(
       break;
     case WRITE_PREPARED:
       txn_db.reset(new WritePreparedTxnDB(
+          db, PessimisticTransactionDB::ValidateTxnDBOptions(txn_db_options)));
+      break;
+    case ASYNC_WRITE_COMMITTED: // add for async
+      txn_db.reset(new AsyncWriteCommittedTxnDB(
+          db, PessimisticTransactionDB::ValidateTxnDBOptions(txn_db_options)));
+      break;
+    case ASYNC_WRITE_PREPARED: // add for async
+     txn_db.reset(new AsyncWritePreparedTxnDB(
           db, PessimisticTransactionDB::ValidateTxnDBOptions(txn_db_options)));
       break;
     case WRITE_COMMITTED:

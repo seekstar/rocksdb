@@ -153,6 +153,8 @@ case "$TARGET_OS" in
         if test -z "$USE_FOLLY_DISTRIBUTED_MUTEX"; then
           USE_FOLLY_DISTRIBUTED_MUTEX=1
         fi
+        # ssdlogging
+        PLATFORM_LDFLAGS="$PLATFORM_LDFLAGS -lspdk"
         # PORT_FILES=port/linux/linux_specific.cc
         ;;
     SunOS)

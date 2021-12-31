@@ -41,6 +41,7 @@ class DisableGCSnapshotChecker : public SnapshotChecker {
 };
 
 class WritePreparedTxnDB;
+class AsyncWritePreparedTxnDB;
 
 // Callback class created by WritePreparedTxnDB to check if a key
 // is visible by a snapshot.
@@ -56,6 +57,22 @@ class WritePreparedSnapshotChecker : public SnapshotChecker {
 #ifndef ROCKSDB_LITE
   const WritePreparedTxnDB* const txn_db_;
 #endif  // !ROCKSDB_LITE
+};
+
+//add for async
+class AsyncWritePreparedSnapshotChecker : public SnapshotChecker {
+ public:
+  explicit AsyncWritePreparedSnapshotChecker(AsyncWritePreparedTxnDB* txn_db);
+  virtual ~AsyncWritePreparedSnapshotChecker() {}
+
+  virtual SnapshotCheckerResult CheckInSnapshot(
+      SequenceNumber sequence, SequenceNumber snapshot_sequence) const override;
+
+ private:
+#ifndef ROCKSDB_LITE
+  const AsyncWritePreparedTxnDB* const txn_db_;
+#endif  // !ROCKSDB_LITE
+//end add for async
 };
 
 }  // namespace rocksdb

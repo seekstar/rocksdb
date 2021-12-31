@@ -24,6 +24,8 @@
 #include "utilities/transactions/transaction_lock_mgr.h"
 #include "utilities/transactions/write_prepared_txn.h"
 
+// #include "utilities/transactions/async_write_prepared_txn.h"  // add for async
+
 namespace rocksdb {
 
 class PessimisticTransactionDB : public TransactionDB {
@@ -156,6 +158,7 @@ class PessimisticTransactionDB : public TransactionDB {
 
  private:
   friend class WritePreparedTxnDB;
+//   friend class AsyncWritePreparedTxnDB;  // add for async
   friend class WritePreparedTxnDBMock;
   friend class WriteUnpreparedTxn;
   friend class TransactionTest_DoubleEmptyWrite_Test;

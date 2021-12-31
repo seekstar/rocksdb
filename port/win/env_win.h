@@ -199,6 +199,7 @@ private:
 
 class WinEnv : public Env {
 public:
+  using Env::NewWritableFile;
   WinEnv();
 
   ~WinEnv();

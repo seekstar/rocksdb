@@ -22,6 +22,10 @@ extern Status NewWritableFile(Env* env, const std::string& fname,
                               std::unique_ptr<WritableFile>* result,
                               const EnvOptions& options);
 
+Status NewWritableFile(Env* env, const std::string& fname,
+                       std::unique_ptr<WritableFile>* result,
+                       const EnvOptions& options, uint64_t pre_allocate_size);
+
 // Read a single line from a file.
 bool ReadOneLine(std::istringstream* iss, SequentialFile* seq_file,
                  std::string* output, bool* has_data, Status* result);

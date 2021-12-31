@@ -18,11 +18,29 @@ struct ImmutableDBOptions {
 
   void Dump(Logger* log) const;
 
+  // spandb
+  bool enable_spdklogging;
+  bool transactional_mode;
+  int ssdlogging_num;
+  std::string ssdlogging_path;
+  std::string ssdlogging_type;
+  bool spdk_recovery;
+  uint64_t last_logging_lpn;
+  int logging_server_num = 0;
+  int before_server_num = 0;
+  int after_server_num = 0;
+  int spandb_worker_num = 0;
+  int max_read_que_length = 1;
+  bool auto_config = false;
+  bool dynamic_moving = false;
+
   bool create_if_missing;
   bool create_missing_column_families;
   bool error_if_exists;
   bool paranoid_checks;
   Env* env;
+  Env* lo_env;
+  int max_level;
   std::shared_ptr<RateLimiter> rate_limiter;
   std::shared_ptr<SstFileManager> sst_file_manager;
   std::shared_ptr<Logger> info_log;

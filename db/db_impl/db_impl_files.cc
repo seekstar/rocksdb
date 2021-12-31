@@ -226,6 +226,10 @@ void DBImpl::FindObsoleteFiles(JobContext* job_context, bool force,
     }
     // Current log cannot be obsolete.
     assert(!logs_.empty());
+
+    if(spdk_logging_server_ != nullptr){ // add for ssdlogging
+      spdk_logging_server_->DeleteLog(min_log_number, alive_log_files_.size());
+    }
   }
 
   // We're just cleaning up for DB::Write().
@@ -263,6 +267,9 @@ void DBImpl::DeleteObsoleteFileImpl(int job_id, const std::string& fname,
                      /*force_bg=*/false, /*force_fg=*/!wal_in_db_path_);
   } else {
     file_deletion_status = env_->DeleteFile(fname);
+  }
+  if(!file_deletion_status.ok()){
+    file_deletion_status = lo_env_->DeleteFile(fname);
   }
   TEST_SYNC_POINT_CALLBACK("DBImpl::DeleteObsoleteFileImpl:AfterDeletion",
                            &file_deletion_status);

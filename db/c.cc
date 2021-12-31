@@ -3305,6 +3305,13 @@ rocksdb_env_t* rocksdb_create_default_env() {
   return result;
 }
 
+rocksdb_env_t* rocksdb_create_spdk_env() {
+  rocksdb_env_t* result = new rocksdb_env_t;
+  result->rep = rocksdb::NewSpdkEnv(Env::Default());
+  result->is_default = false;
+  return result;
+}
+
 rocksdb_env_t* rocksdb_create_mem_env() {
   rocksdb_env_t* result = new rocksdb_env_t;
   result->rep = rocksdb::NewMemEnv(Env::Default());

@@ -135,7 +135,7 @@ FlushJob::~FlushJob() {
 
 void FlushJob::ReportStartedFlush() {
   ThreadStatusUtil::SetColumnFamily(cfd_, cfd_->ioptions()->env,
-                                    db_options_.enable_thread_tracking);
+                                   db_options_.enable_thread_tracking);
   ThreadStatusUtil::SetThreadOperation(ThreadStatus::OP_FLUSH);
   ThreadStatusUtil::SetThreadOperationProperty(
       ThreadStatus::COMPACTION_JOB_ID,
@@ -351,7 +351,9 @@ Status FlushJob::WriteLevel0Table() {
       TEST_SYNC_POINT_CALLBACK("FlushJob::WriteLevel0Table:output_compression",
                                &output_compression_);
       int64_t _current_time = 0;
+    
       auto status = db_options_.env->GetCurrentTime(&_current_time);
+
       // Safe to proceed even if GetCurrentTime fails. So, log and proceed.
       if (!status.ok()) {
         ROCKS_LOG_WARN(
@@ -364,20 +366,36 @@ Status FlushJob::WriteLevel0Table() {
 
       uint64_t oldest_key_time =
           mems_.front()->ApproximateOldestKeyTime();
-
-      s = BuildTable(
-          dbname_, db_options_.env, *cfd_->ioptions(), mutable_cf_options_,
-          env_options_, cfd_->table_cache(), iter.get(),
-          std::move(range_del_iters), &meta_, cfd_->internal_comparator(),
-          cfd_->int_tbl_prop_collector_factories(), cfd_->GetID(),
-          cfd_->GetName(), existing_snapshots_,
-          earliest_write_conflict_snapshot_, snapshot_checker_,
-          output_compression_, mutable_cf_options_.sample_for_compression,
-          cfd_->ioptions()->compression_opts,
-          mutable_cf_options_.paranoid_file_checks, cfd_->internal_stats(),
-          TableFileCreationReason::kFlush, event_logger_, job_context_->job_id,
-          Env::IO_HIGH, &table_properties_, 0 /* level */, current_time,
-          oldest_key_time, write_hint, current_time);
+      // if(db_options_.max_level < 0){
+      if(spandb_controller_.GetMaxLevel() < 0){
+        s = BuildTable(
+            dbname_, db_options_.env, *cfd_->ioptions(), mutable_cf_options_,
+            env_options_, cfd_->table_cache(), iter.get(),
+            std::move(range_del_iters), &meta_, cfd_->internal_comparator(),
+            cfd_->int_tbl_prop_collector_factories(), cfd_->GetID(),
+            cfd_->GetName(), existing_snapshots_,
+            earliest_write_conflict_snapshot_, snapshot_checker_,
+            output_compression_, mutable_cf_options_.sample_for_compression,
+            cfd_->ioptions()->compression_opts,
+            mutable_cf_options_.paranoid_file_checks, cfd_->internal_stats(),
+            TableFileCreationReason::kFlush, event_logger_, job_context_->job_id,
+            Env::IO_HIGH, &table_properties_, 0 /* level */, current_time,
+            oldest_key_time, write_hint, current_time);
+      }else{
+        s = BuildTable(
+            dbname_, db_options_.lo_env, *cfd_->ioptions(), mutable_cf_options_,
+            env_options_, cfd_->table_cache(), iter.get(),
+            std::move(range_del_iters), &meta_, cfd_->internal_comparator(),
+            cfd_->int_tbl_prop_collector_factories(), cfd_->GetID(),
+            cfd_->GetName(), existing_snapshots_,
+            earliest_write_conflict_snapshot_, snapshot_checker_,
+            output_compression_, mutable_cf_options_.sample_for_compression,
+            cfd_->ioptions()->compression_opts,
+            mutable_cf_options_.paranoid_file_checks, cfd_->internal_stats(),
+            TableFileCreationReason::kFlush, event_logger_, job_context_->job_id,
+            Env::IO_HIGH, &table_properties_, 0 /* level */, current_time,
+            oldest_key_time, write_hint, current_time);
+      }
       LogFlush(db_options_.info_log);
     }
     ROCKS_LOG_INFO(db_options_.info_log,

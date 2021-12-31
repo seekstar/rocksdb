@@ -15,6 +15,7 @@ namespace rocksdb {
 // operations, reporting results to variables in PerfContext.
 class TimedEnv : public EnvWrapper {
  public:
+  using EnvWrapper::NewWritableFile;
   explicit TimedEnv(Env* base_env) : EnvWrapper(base_env) {}
 
   Status NewSequentialFile(const std::string& fname,

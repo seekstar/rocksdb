@@ -60,6 +60,7 @@ class Status {
     kTryAgain = 13,
     kCompactionTooLarge = 14,
     kColumnFamilyDropped = 15,
+    kPending = 16,
     kMaxCode
   };
 
@@ -161,6 +162,7 @@ class Status {
   }
 
   static Status Busy(SubCode msg = kNone) { return Status(kBusy, msg); }
+  static Status Pending(SubCode msg = kNone) {return Status(kPending, msg);}
   static Status Busy(const Slice& msg, const Slice& msg2 = Slice()) {
     return Status(kBusy, msg, msg2);
   }
@@ -255,6 +257,7 @@ class Status {
   // Returns true iff the status indicates that a resource is Busy and
   // temporarily could not be acquired.
   bool IsBusy() const { return code() == kBusy; }
+  bool IsPending() const { return code() == kPending;}
 
   bool IsDeadlock() const { return code() == kBusy && subcode() == kDeadlock; }
 

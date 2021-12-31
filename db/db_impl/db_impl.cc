@@ -107,6 +107,8 @@ const std::string kPersistentStatsColumnFamilyName(
     "___rocksdb_stats_history___");
 void DumpRocksDBBuildVersion(Logger* log);
 
+RequestScheduler *request_scheduler_ = nullptr;
+
 CompressionType GetCompressionFlush(
     const ImmutableCFOptions& ioptions,
     const MutableCFOptions& mutable_cf_options) {
@@ -148,6 +150,7 @@ int64_t kDefaultLowPriThrottledRate = 2 * 1024 * 1024;
 DBImpl::DBImpl(const DBOptions& options, const std::string& dbname,
                const bool seq_per_batch, const bool batch_per_txn)
     : env_(options.env),
+      lo_env_(options.lo_env),
       dbname_(dbname),
       own_info_log_(options.info_log == nullptr),
       initial_db_options_(SanitizeOptions(dbname, options)),
@@ -235,6 +238,8 @@ DBImpl::DBImpl(const DBOptions& options, const std::string& dbname,
   // WriteUnprepared, which should use seq_per_batch_.
   assert(batch_per_txn_ || seq_per_batch_);
   env_->GetAbsolutePath(dbname, &db_absolute_path_);
+
+  begin_write_stall_.store(false); //add for spdklogging
 
   // Reserve ten files or so for other uses and give the rest to TableCache.
   // Give a large number for setting of "infinite" open files.
@@ -458,7 +463,14 @@ Status DBImpl::CloseHelper() {
   int bottom_compactions_unscheduled =
       env_->UnSchedule(this, Env::Priority::BOTTOM);
   int compactions_unscheduled = env_->UnSchedule(this, Env::Priority::LOW);
+  if(request_scheduler_ != nullptr){
+    compactions_unscheduled += request_scheduler_->UnSchedule(this, Env::Priority::LOW);
+  }
+  int spandb_compactions_unscheduled = 0;
   int flushes_unscheduled = env_->UnSchedule(this, Env::Priority::HIGH);
+  if(request_scheduler_ != nullptr){
+    flushes_unscheduled += request_scheduler_->UnSchedule(this, Env::Priority::HIGH);
+  }
   Status ret;
   mutex_.Lock();
   bg_bottom_compaction_scheduled_ -= bottom_compactions_unscheduled;
@@ -478,7 +490,6 @@ Status DBImpl::CloseHelper() {
   EraseThreadStatusDbInfo();
   flush_scheduler_.Clear();
   trim_history_scheduler_.Clear();
-
   while (!flush_queue_.empty()) {
     const FlushRequest& flush_req = PopFirstFromFlushQueue();
     for (const auto& iter : flush_req) {
@@ -494,7 +505,6 @@ Status DBImpl::CloseHelper() {
       delete cfd;
     }
   }
-
   if (default_cf_handle_ != nullptr || persist_stats_cf_handle_ != nullptr) {
     // we need to delete handle outside of lock because it does its own locking
     mutex_.Unlock();
@@ -615,6 +625,7 @@ DBImpl::~DBImpl() {
     closed_ = true;
     CloseHelper();
   }
+  StopLogging(); //add for spdklogging
 }
 
 void DBImpl::MaybeIgnoreError(Status* s) const {
@@ -1308,7 +1319,14 @@ void DBImpl::SchedulePurge() {
 
   // Purge operations are put into High priority queue
   bg_purge_scheduled_++;
-  env_->Schedule(&DBImpl::BGWorkPurge, this, Env::Priority::HIGH, nullptr);
+  //env_->Schedule(&DBImpl::BGWorkPurge, this, Env::Priority::HIGH, nullptr);
+  if(immutable_db_options_.auto_config && request_scheduler_ != nullptr){
+    request_scheduler_->Schedule(&DBImpl::BGWorkPurge, this, Env::Priority::HIGH, nullptr);
+  }else if(immutable_db_options_.auto_config && immutable_db_options_.transactional_mode){
+    spandb_controller_.Schedule(&DBImpl::BGWorkPurge, this, Env::Priority::HIGH, nullptr);
+  }else{
+    env_->Schedule(&DBImpl::BGWorkPurge, this, Env::Priority::HIGH, nullptr);
+  }
 }
 
 void DBImpl::BackgroundCallPurge() {
@@ -2715,6 +2733,13 @@ Status DBImpl::ResetStats() {
       cfd->internal_stats()->Clear();
     }
   }
+  //add for SpanDB
+  if(request_scheduler_ != nullptr){
+    request_scheduler_->ResetStats();
+  }
+  if(spdk_logging_server_ != nullptr){
+    spdk_logging_server_->ResetStats();
+  }
   return Status::OK();
 }
 #endif  // ROCKSDB_LITE
@@ -3121,14 +3146,17 @@ Status DBImpl::CheckConsistency() {
   for (const auto& md : metadata) {
     // md.name has a leading "/".
     std::string file_path = md.db_path + md.name;
-
     uint64_t fsize = 0;
     TEST_SYNC_POINT("DBImpl::CheckConsistency:BeforeGetFileSize");
     Status s = env_->GetFileSize(file_path, &fsize);
     if (!s.ok() &&
-        env_->GetFileSize(Rocks2LevelTableFileName(file_path), &fsize).ok()) {
+       env_->GetFileSize(Rocks2LevelTableFileName(file_path), &fsize).ok()) {
       s = Status::OK();
+    }else{
+      if(!s.ok()&&lo_env_->GetFileSize(file_path, &fsize).ok())
+        s=Status::OK();
     }
+
     if (!s.ok()) {
       corruption_messages +=
           "Can't access " + md.name + ": " + s.ToString() + "\n";

@@ -346,6 +346,7 @@ void MemTableList::PickMemtablesToFlush(const uint64_t* max_memtable_id,
     if (!m->flush_in_progress_) {
       assert(!m->flush_completed_);
       num_flush_not_started_--;
+      spandb_controller_.DecreaseImm();
       if (num_flush_not_started_ == 0) {
         imm_flush_needed.store(false, std::memory_order_release);
       }
@@ -374,6 +375,7 @@ void MemTableList::RollbackMemtableFlush(const autovector<MemTable*>& mems,
     m->flush_completed_ = false;
     m->edit_.Clear();
     num_flush_not_started_++;
+    spandb_controller_.IncreaseImm();
   }
   imm_flush_needed.store(true, std::memory_order_release);
 }
@@ -515,6 +517,7 @@ Status MemTableList::TryInstallMemtableFlushResults(
           m->flush_in_progress_ = false;
           m->edit_.Clear();
           num_flush_not_started_++;
+          spandb_controller_.IncreaseImm();
           m->file_number_ = 0;
           imm_flush_needed.store(true, std::memory_order_release);
           ++mem_id;
@@ -538,6 +541,7 @@ void MemTableList::Add(MemTable* m, autovector<MemTable*>* to_delete) {
   current_->Add(m, to_delete);
   m->MarkImmutable();
   num_flush_not_started_++;
+  spandb_controller_.IncreaseImm();
   if (num_flush_not_started_ == 1) {
     imm_flush_needed.store(true, std::memory_order_release);
   }
@@ -723,6 +727,7 @@ Status InstallMemtableAtomicFlushResults(
         m->GetEdits()->Clear();
         m->SetFileNumber(0);
         imm->num_flush_not_started_++;
+        spandb_controller_.IncreaseImm();
       }
       imm->imm_flush_needed.store(true, std::memory_order_release);
     }
@@ -743,6 +748,7 @@ void MemTableList::RemoveOldMemTables(uint64_t log_number,
     }
     current_->Remove(mem, to_delete);
     --num_flush_not_started_;
+    spandb_controller_.DecreaseImm();
     if (0 == num_flush_not_started_) {
       imm_flush_needed.store(false, std::memory_order_release);
     }

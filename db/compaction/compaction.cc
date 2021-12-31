@@ -514,6 +514,21 @@ uint64_t Compaction::OutputFilePreallocationSize() const {
                   preallocation_size + (preallocation_size / 10));
 }
 
+uint64_t Compaction::SpanDBOutputFilePreallocationSize() const {
+  uint64_t preallocation_size = 0;
+  for (const auto& level_files : inputs_) {
+    for (const auto& file : level_files.files) {
+      preallocation_size += file->fd.GetFileSize();
+    }
+  }
+  if (max_output_file_size_ != port::kMaxUint64 &&
+      immutable_cf_options_.compaction_style == kCompactionStyleLevel &&
+      output_level() != 0) {
+    preallocation_size = std::min(max_output_file_size_, preallocation_size);
+  }
+  return preallocation_size;
+}
+
 std::unique_ptr<CompactionFilter> Compaction::CreateCompactionFilter() const {
   if (!cfd_->ioptions()->compaction_filter_factory) {
     return nullptr;

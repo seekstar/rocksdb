@@ -22,6 +22,7 @@ namespace rocksdb {
 
 class ChrootEnv : public EnvWrapper {
  public:
+  using EnvWrapper::NewWritableFile;
   ChrootEnv(Env* base_env, const std::string& chroot_dir)
       : EnvWrapper(base_env) {
 #if defined(OS_AIX)

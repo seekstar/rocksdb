@@ -474,6 +474,7 @@ class WritePreparedTxnDB : public PessimisticTransactionDB {
   friend class WritePreparedCommitEntryPreReleaseCallback;
   friend class WritePreparedTransactionTestBase;
   friend class WritePreparedTxn;
+  friend class AsyncWritePreparedTxn; // add for async
   friend class WritePreparedTxnDBMock;
   friend class WritePreparedTransactionTest_AddPreparedBeforeMax_Test;
   friend class WritePreparedTransactionTest_AdvanceMaxEvictedSeqBasicTest_Test;

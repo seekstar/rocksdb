@@ -8,6 +8,7 @@
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
 #include "util/threadpool_imp.h"
+#include "ssdlogging/util.h"
 
 #include "monitoring/thread_status_util.h"
 #include "port/port.h"
@@ -187,6 +188,8 @@ void ThreadPoolImpl::Impl::BGThread(size_t thread_id) {
   bool low_io_priority = false;
   bool low_cpu_priority = false;
 
+  int num = 0;
+
   while (true) {
     // Wait until there is an item that is ready to run
     std::unique_lock<std::mutex> lock(mu_);
@@ -262,8 +265,14 @@ void ThreadPoolImpl::Impl::BGThread(size_t thread_id) {
     (void)decrease_io_priority;  // avoid 'unused variable' error
     (void)decrease_cpu_priority;
 #endif
+    
     func();
+    num++;
   }
+  if(priority_ == Env::Priority::LOW)
+    printf("Low priority thrd %ld call: %d\n", thread_id, num);
+  if(priority_ == Env::Priority::HIGH)
+    printf("High priority thrd %ld call: %d\n", thread_id, num);
 }
 
 // Helper struct for passing arguments when creating threads.
@@ -285,9 +294,27 @@ void ThreadPoolImpl::Impl::BGThreadWrapper(void* arg) {
   switch (tp->GetThreadPriority()) {
     case Env::Priority::HIGH:
       thread_type = ThreadStatus::HIGH_PRIORITY;
+
+      thread_local_info_.SetName("rocksdb_flusher_" + std::to_string(thread_id));
+      thread_local_info_.SetMaster(thread_id == 0);
+
+      if(spandb_controller_.GetFlushCores() > 0){
+        int coreid = thread_id % spandb_controller_.GetFlushCores() + 1;
+        ssdlogging::SetAffinity("rocksdb flush", coreid);
+      }
+
       break;
     case Env::Priority::LOW:
       thread_type = ThreadStatus::LOW_PRIORITY;
+
+      thread_local_info_.SetName("rocksdb_compactor_" + std::to_string(thread_id));
+      thread_local_info_.SetMaster(thread_id == 0);
+
+      if(spandb_controller_.GetCompactionCores() > 0){
+        int coreid = spandb_controller_.GetFlushCores() + thread_id % spandb_controller_.GetCompactionCores() + 1;
+        ssdlogging::SetAffinity("rocksdb compaction", coreid);
+      }
+
       break;
     case Env::Priority::BOTTOM:
       thread_type = ThreadStatus::BOTTOM_PRIORITY;

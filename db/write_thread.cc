@@ -570,7 +570,7 @@ void WriteThread::ExitAsMemTableWriter(Writer* /*self*/,
 void WriteThread::LaunchParallelMemTableWriters(WriteGroup* write_group) {
   assert(write_group != nullptr);
   write_group->running.store(write_group->size);
-  for (auto w : *write_group) {
+  for (auto w : *write_group) { 
     SetState(w, STATE_PARALLEL_MEMTABLE_WRITER);
   }
 }
@@ -587,6 +587,7 @@ bool WriteThread::CompleteParallelMemTableWriter(Writer* w) {
 
   if (write_group->running-- > 1) {
     // we're not the last one
+    PERF_TIMER_GUARD(complete_parallel_memtable_time);  // spandb
     AwaitState(w, STATE_COMPLETED, &cpmtw_ctx);
     return false;
   }

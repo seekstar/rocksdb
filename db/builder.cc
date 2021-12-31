@@ -121,6 +121,10 @@ Status BuildTable(
       TEST_SYNC_POINT_CALLBACK("BuildTable:create_file", &use_direct_writes);
 #endif  // !NDEBUG
       s = NewWritableFile(env, fname, &file, env_options);
+      if(!s.ok()){
+        printf("create file on SPDK failed, turn to use default env\n");
+        s = NewWritableFile(ioptions.env, fname, &file, env_options);
+      }
       if (!s.ok()) {
         EventHelpers::LogAndNotifyTableFileCreationFinished(
             event_logger, ioptions.listeners, dbname, column_family_name, fname,
